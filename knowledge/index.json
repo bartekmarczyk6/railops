@@ -1,0 +1,814 @@
+{
+  "passages": [
+    {
+      "id": "cancelled-train__01__summary",
+      "sourceId": "cancelled-train",
+      "title": "Cancelled train refund handling",
+      "heading": "Summary",
+      "topics": [
+        "cancelled_train_refund"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "Cancellations before departure are handled separately from in-journey delays. The full refund rule applies unless the customer travelled on a rebooked alternative before the cancellation window closed."
+    },
+    {
+      "id": "cancelled-train__02__handling-guidance",
+      "sourceId": "cancelled-train",
+      "title": "Cancelled train refund handling",
+      "heading": "Handling guidance",
+      "topics": [
+        "cancelled_train_refund"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "1. Inspect the disruption record and confirm the cancellation flag, the cancelled train number and the planned departure timestamp.\n2. Resolve the booking by ticket number and verify that no completed journey segment exists for the original train.\n3. Confirm the customer has not already accepted a rebooking compensation recorded against the same ticket.\n4. Issue the refund through the payment channel associated with the original payment identifier.\n5. Record the cancellation outcome against `policy.refund-rules.cancellation-order`."
+    },
+    {
+      "id": "cancelled-train__03__escalate-when",
+      "sourceId": "cancelled-train",
+      "title": "Cancelled train refund handling",
+      "heading": "Escalate when",
+      "topics": [
+        "cancelled_train_refund"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "- The customer claims the train ran but the disruption record shows it was cancelled.\n- The original train was cancelled but the customer actually travelled on a replacement service with a different fare class.\n- The rebooking was already compensated and the customer requests a second refund on the same payment."
+    },
+    {
+      "id": "cancelled-train__04__deterministic-policy-boundary",
+      "sourceId": "cancelled-train",
+      "title": "Cancelled train refund handling",
+      "heading": "Deterministic policy boundary",
+      "topics": [
+        "cancelled_train_refund"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "`refund = paid_price * policy.refund-rules.cancellation-factor[fare_class]` where `fare_class` comes from the ticket record.\n\n| Fare class | Factor |\n|------------|--------|\n| `standard` | `1.00` |\n| `discount` | `0.75` |\n| `group` | `1.00` |\n\nBoundary source: `policy.refund-rules.cancellation-factor`."
+    },
+    {
+      "id": "cancelled-train__05__forum-reference",
+      "sourceId": "cancelled-train",
+      "title": "Cancelled train refund handling",
+      "heading": "Forum reference",
+      "topics": [
+        "cancelled_train_refund"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "Forum posts typically describe uncertainty about whether a rebooked seat counts as having travelled. Paraphrased; see `docs/research/support-case-dropdown-candidates.md` for the prior topic survey."
+    },
+    {
+      "id": "cancelled-train__06__related-references",
+      "sourceId": "cancelled-train",
+      "title": "Cancelled train refund handling",
+      "heading": "Related references",
+      "topics": [
+        "cancelled_train_refund"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "- `policy.refund-rules.cancellation-order`\n- `record:ticket:<id>`\n- `record:disruption:<id>`"
+    },
+    {
+      "id": "delay-refund__01__summary",
+      "sourceId": "delay-refund",
+      "title": "Delay-related refund handling",
+      "heading": "Summary",
+      "topics": [
+        "delay_refund",
+        "cancelled_train_refund"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "Refund eligibility for delayed trains is bounded by the delay-minute thresholds defined in `policy.refund-rules`. Apply the same calculation to cancellations when the carrier cancelled before departure."
+    },
+    {
+      "id": "delay-refund__02__handling-guidance",
+      "sourceId": "delay-refund",
+      "title": "Delay-related refund handling",
+      "heading": "Handling guidance",
+      "topics": [
+        "delay_refund",
+        "cancelled_train_refund"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "1. Confirm the journey date, train number, ticket number and booked fare from the ticket record before computing a refund.\n2. Read actual arrival time and scheduled arrival time from the disruption record; compute the delay minutes deterministically.\n3. Map the delay minutes to the bucket defined by `policy.refund-rules.delay-buckets` and apply the matching factor to the paid price.\n4. Cross-check that the ticket is not flagged as already refunded in the payment history before issuing.\n5. When the same journey has both delay and cancellation events, the cancellation override applies if `policy.refund-rules.cancellation-order` selects it."
+    },
+    {
+      "id": "delay-refund__03__escalate-when",
+      "sourceId": "delay-refund",
+      "title": "Delay-related refund handling",
+      "heading": "Escalate when",
+      "topics": [
+        "delay_refund",
+        "cancelled_train_refund"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "- The customer-claimed delay differs from the disruption record by more than fifteen minutes.\n- The ticket is partially used for a multi-leg journey and the travelled legs exceed the booked fare.\n- A refund has already been processed for the same payment identifier within the rolling window.\n- The booked fare is a non-refundable promotion flagged in the ticket record."
+    },
+    {
+      "id": "delay-refund__04__deterministic-policy-boundary",
+      "sourceId": "delay-refund",
+      "title": "Delay-related refund handling",
+      "heading": "Deterministic policy boundary",
+      "topics": [
+        "delay_refund",
+        "cancelled_train_refund"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "`refund = paid_price * policy.refund-rules.delay-factor[delay_minutes_bucket]`.\n\n| Delay bucket | Factor |\n|--------------|--------|\n| `under_60` | `0.00` |\n| `60_to_119` | `0.50` |\n| `120_and_above` | `1.00` |\n\nSee `policy.refund-rules.delay-buckets` for the canonical source of the bucket boundaries."
+    },
+    {
+      "id": "delay-refund__05__forum-reference",
+      "sourceId": "delay-refund",
+      "title": "Delay-related refund handling",
+      "heading": "Forum reference",
+      "topics": [
+        "delay_refund",
+        "cancelled_train_refund"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "Users typically report confusion when a partial refund lands without a clear formula explanation. Forum posts also describe duplicate-refund concerns after automatic processing. Forum material paraphrased here, see `docs/research/support-case-dropdown-candidates.md` for the prior topic survey."
+    },
+    {
+      "id": "delay-refund__06__related-references",
+      "sourceId": "delay-refund",
+      "title": "Delay-related refund handling",
+      "heading": "Related references",
+      "topics": [
+        "delay_refund",
+        "cancelled_train_refund"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "- `policy.refund-rules`\n- `policy.disruption-records`\n- `record:ticket:<id>`\n- `record:payment:<id>`"
+    },
+    {
+      "id": "missed-connection__01__summary",
+      "sourceId": "missed-connection",
+      "title": "Missed connection handling",
+      "heading": "Summary",
+      "topics": [
+        "missed_connection"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "Missed-connection eligibility depends on the minimum transfer time defined in `policy.connection-rules`. Re-routing or partial refund is decided by the booking chain recorded on the original ticket."
+    },
+    {
+      "id": "missed-connection__02__handling-guidance",
+      "sourceId": "missed-connection",
+      "title": "Missed connection handling",
+      "heading": "Handling guidance",
+      "topics": [
+        "missed_connection"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "1. Resolve the booking chain from the ticket record; identify the connecting trains and the planned transfer station.\n2. Read actual arrival at the transfer station from the disruption record for the upstream leg.\n3. Compare the upstream arrival against the scheduled departure of the downstream leg and the minimum transfer buffer from `policy.connection-rules.min-transfer`.\n4. When the chain was booked together, offer the rebooking branch from `policy.connection-rules.rebook-options`.\n5. When the chain was booked separately, only the upstream leg is eligible for rebooking; do not extend eligibility to the downstream ticket."
+    },
+    {
+      "id": "missed-connection__03__escalate-when",
+      "sourceId": "missed-connection",
+      "title": "Missed connection handling",
+      "heading": "Escalate when",
+      "topics": [
+        "missed_connection"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "- The missed connection exceeds the minimum transfer time and the customer disputes the buffer.\n- The downstream ticket is held under a different passenger identity and is not part of the same booking chain.\n- The upstream carrier disputes the recorded actual arrival time."
+    },
+    {
+      "id": "missed-connection__04__deterministic-policy-boundary",
+      "sourceId": "missed-connection",
+      "title": "Missed connection handling",
+      "heading": "Deterministic policy boundary",
+      "topics": [
+        "missed_connection"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "`eligible = (actual_arrival - scheduled_departure) < policy.connection-rules.min-transfer[station]` where `eligible` is `true` only when both legs share the same booking chain identifier.\n\nBoundary source: `policy.connection-rules.min-transfer`."
+    },
+    {
+      "id": "missed-connection__05__forum-reference",
+      "sourceId": "missed-connection",
+      "title": "Missed connection handling",
+      "heading": "Forum reference",
+      "topics": [
+        "missed_connection"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "Users typically ask whether a separately bought downstream ticket still receives protection. Forum material paraphrased here."
+    },
+    {
+      "id": "missed-connection__06__related-references",
+      "sourceId": "missed-connection",
+      "title": "Missed connection handling",
+      "heading": "Related references",
+      "topics": [
+        "missed_connection"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "- `policy.connection-rules.rebook-options`\n- `record:ticket:<id>`\n- `record:route:<id>`"
+    },
+    {
+      "id": "missing-refund__01__summary",
+      "sourceId": "missing-refund",
+      "title": "Missing refund investigation",
+      "heading": "Summary",
+      "topics": [
+        "missing_refund"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "A missing-refund claim is investigated against the payment and refund ledger. The investigation may close as already-issued, scheduled, or escalated to the payments queue."
+    },
+    {
+      "id": "missing-refund__02__handling-guidance",
+      "sourceId": "missing-refund",
+      "title": "Missing refund investigation",
+      "heading": "Handling guidance",
+      "topics": [
+        "missing_refund"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "1. Resolve the ticket and the original payment identifier from the customer email.\n2. Look up the most recent refund record keyed by payment identifier in the refund ledger.\n3. If the ledger shows an issued refund, share the payment reference and close the case with a confirming note.\n4. If the ledger shows a scheduled but not yet cleared refund, share the expected clearing date.\n5. If neither, route the case to the payments queue with the gathered evidence and the dispute identifier."
+    },
+    {
+      "id": "missing-refund__03__escalate-when",
+      "sourceId": "missing-refund",
+      "title": "Missing refund investigation",
+      "heading": "Escalate when",
+      "topics": [
+        "missing_refund"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "- The ledger shows the refund was issued but the customer reports it never arrived; gather the bank statement window and escalate.\n- The original payment was made through a third-party wallet that the customer no longer controls.\n- The customer disputes the ledger amount or the destination account."
+    },
+    {
+      "id": "missing-refund__04__deterministic-policy-boundary",
+      "sourceId": "missing-refund",
+      "title": "Missing refund investigation",
+      "heading": "Deterministic policy boundary",
+      "topics": [
+        "missing_refund"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "`status = policy.missing-refund.statuses[ledger_match]` where `ledger_match` is one of `issued`, `scheduled`, `absent`.\n\nBoundary source: `policy.missing-refund.statuses`."
+    },
+    {
+      "id": "missing-refund__05__forum-reference",
+      "sourceId": "missing-refund",
+      "title": "Missing refund investigation",
+      "heading": "Forum reference",
+      "topics": [
+        "missing_refund"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "Forum posts commonly describe customers who did not receive a refund that the system claims to have issued. Paraphrased; see `docs/research/support-case-dropdown-candidates.md`."
+    },
+    {
+      "id": "missing-refund__06__related-references",
+      "sourceId": "missing-refund",
+      "title": "Missing refund investigation",
+      "heading": "Related references",
+      "topics": [
+        "missing_refund"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "- `policy.missing-refund.statuses`\n- `record:payment:<id>`\n- `record:refund:<id>`"
+    },
+    {
+      "id": "name-changes__01__summary",
+      "sourceId": "name-changes",
+      "title": "Passenger name changes",
+      "heading": "Summary",
+      "topics": [
+        "passenger_name_change"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "Passenger name corrections must keep the booking chain intact. Spelling corrections are permitted; identity substitutions follow the transfer procedure in `policy.identity-changes`."
+    },
+    {
+      "id": "name-changes__02__handling-guidance",
+      "sourceId": "name-changes",
+      "title": "Passenger name changes",
+      "heading": "Handling guidance",
+      "topics": [
+        "passenger_name_change"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "1. Resolve the ticket by number and capture the existing passenger name as it appears on the booking.\n2. Compare the existing passenger name with the requested correction and classify the request as a spelling correction or an identity substitution.\n3. For spelling corrections, apply the change after confirming the ticket is unused; record the audit reason.\n4. For identity substitutions, route to `policy.identity-changes.transfer-procedure` and request the documented evidence.\n5. Always retain the original booking identifier alongside the corrected passenger name in the audit log."
+    },
+    {
+      "id": "name-changes__03__escalate-when",
+      "sourceId": "name-changes",
+      "title": "Passenger name changes",
+      "heading": "Escalate when",
+      "topics": [
+        "passenger_name_change"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "- The customer cannot supply evidence supporting the identity substitution.\n- The ticket was purchased under a discount tied to the original passenger identity.\n- The spelling correction changes more than four characters or alters the surname entirely."
+    },
+    {
+      "id": "name-changes__04__deterministic-policy-boundary",
+      "sourceId": "name-changes",
+      "title": "Passenger name changes",
+      "heading": "Deterministic policy boundary",
+      "topics": [
+        "passenger_name_change"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "`classification = correction` when `levenshtein(existing_name, requested_name) <= policy.identity-changes.spelling-threshold`, otherwise `classification = substitution`.\n\nBoundary source: `policy.identity-changes.spelling-threshold`."
+    },
+    {
+      "id": "name-changes__05__forum-reference",
+      "sourceId": "name-changes",
+      "title": "Passenger name changes",
+      "heading": "Forum reference",
+      "topics": [
+        "passenger_name_change"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "Users typically ask whether a misspelled ticket can still be used. Forum material paraphrased here, original threads are not copied."
+    },
+    {
+      "id": "name-changes__06__related-references",
+      "sourceId": "name-changes",
+      "title": "Passenger name changes",
+      "heading": "Related references",
+      "topics": [
+        "passenger_name_change"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "- `policy.identity-changes.transfer-procedure`\n- `policy.identity-changes.spelling-threshold`\n- `record:ticket:<id>`"
+    },
+    {
+      "id": "payment-without-ticket__01__summary",
+      "sourceId": "payment-without-ticket",
+      "title": "Payment without ticket investigation",
+      "heading": "Summary",
+      "topics": [
+        "payment_without_ticket"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "A payment that does not match any active ticket indicates either a failed checkout, a refund-to-credit conversion, or a duplicate billing. Resolution depends on the payment channel recorded against the order."
+    },
+    {
+      "id": "payment-without-ticket__02__handling-guidance",
+      "sourceId": "payment-without-ticket",
+      "title": "Payment without ticket investigation",
+      "heading": "Handling guidance",
+      "topics": [
+        "payment_without_ticket"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "1. Resolve the payment identifier and capture the channel, amount and timestamp.\n2. Search the active ticket ledger for any ticket indexed by the same payment identifier.\n3. If a ticket exists, close the case by sharing the ticket number and journey date.\n4. If no ticket exists and the channel is a refundable wallet, verify the refund ledger for a recently completed reversal.\n5. If neither, escalate to the payments queue with the payment evidence and the channel record."
+    },
+    {
+      "id": "payment-without-ticket__03__escalate-when",
+      "sourceId": "payment-without-ticket",
+      "title": "Payment without ticket investigation",
+      "heading": "Escalate when",
+      "topics": [
+        "payment_without_ticket"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "- The customer reports a charge but the payment channel shows a pending authorisation rather than a captured payment.\n- Multiple ticket attempts produced more than one captured payment for the same journey.\n- The customer suspects a duplicate billing and requires a formal adjustment."
+    },
+    {
+      "id": "payment-without-ticket__04__deterministic-policy-boundary",
+      "sourceId": "payment-without-ticket",
+      "title": "Payment without ticket investigation",
+      "heading": "Deterministic policy boundary",
+      "topics": [
+        "payment_without_ticket"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "`next_step = policy.payment-without-ticket.actions[ledger_state]` where `ledger_state` is one of `ticket_present`, `refund_recorded`, `absent`.\n\nBoundary source: `policy.payment-without-ticket.actions`."
+    },
+    {
+      "id": "payment-without-ticket__05__forum-reference",
+      "sourceId": "payment-without-ticket",
+      "title": "Payment without ticket investigation",
+      "heading": "Forum reference",
+      "topics": [
+        "payment_without_ticket"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "Forum threads often describe uncertainty when a receipt arrives without a ticket email. Material paraphrased only."
+    },
+    {
+      "id": "payment-without-ticket__06__related-references",
+      "sourceId": "payment-without-ticket",
+      "title": "Payment without ticket investigation",
+      "heading": "Related references",
+      "topics": [
+        "payment_without_ticket"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "- `policy.payment-without-ticket.actions`\n- `record:payment:<id>`\n- `record:ticket:<id>`"
+    },
+    {
+      "id": "response-examples__01__summary",
+      "sourceId": "response-examples",
+      "title": "Response examples for common cases",
+      "heading": "Summary",
+      "topics": [
+        "delay_refund",
+        "cancelled_train_refund",
+        "missed_connection",
+        "ticket_change",
+        "passenger_name_change",
+        "missing_refund",
+        "payment_without_ticket",
+        "validation_discount_penalty"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "Short, neutral-tone response fragments for the eight supported topics. Use these as starting points only — the draft must still cite the matching record and rule identifiers."
+    },
+    {
+      "id": "response-examples__02__refund-delay-acknowledgment",
+      "sourceId": "response-examples",
+      "title": "Response examples for common cases",
+      "heading": "Refund delay acknowledgment",
+      "topics": [
+        "delay_refund",
+        "cancelled_train_refund",
+        "missed_connection",
+        "ticket_change",
+        "passenger_name_change",
+        "missing_refund",
+        "payment_without_ticket",
+        "validation_discount_penalty"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "> Thank you for the ticket details. Based on the recorded delay of [DELAY_MIN] minutes, the matching refund factor is [FACTOR] of the paid price. The refund amount is [AMOUNT] and will be returned through the original payment channel."
+    },
+    {
+      "id": "response-examples__03__cancellation-rebooking-offer",
+      "sourceId": "response-examples",
+      "title": "Response examples for common cases",
+      "heading": "Cancellation rebooking offer",
+      "topics": [
+        "delay_refund",
+        "cancelled_train_refund",
+        "missed_connection",
+        "ticket_change",
+        "passenger_name_change",
+        "missing_refund",
+        "payment_without_ticket",
+        "validation_discount_penalty"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "> Your train has been cancelled. The original fare can be refunded in full, or you can accept the rebooking option on [ALTERNATIVE_TRAIN] at no additional cost. Please confirm your preferred option."
+    },
+    {
+      "id": "response-examples__04__missed-connection-explanation",
+      "sourceId": "response-examples",
+      "title": "Response examples for common cases",
+      "heading": "Missed connection explanation",
+      "topics": [
+        "delay_refund",
+        "cancelled_train_refund",
+        "missed_connection",
+        "ticket_change",
+        "passenger_name_change",
+        "missing_refund",
+        "payment_without_ticket",
+        "validation_discount_penalty"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "> The connecting train was missed because the upstream leg arrived [MIN] minutes after the minimum transfer window. Re-routing is offered from the policy without a fee when both legs share the same booking chain."
+    },
+    {
+      "id": "response-examples__05__ticket-change-confirmation",
+      "sourceId": "response-examples",
+      "title": "Response examples for common cases",
+      "heading": "Ticket change confirmation",
+      "topics": [
+        "delay_refund",
+        "cancelled_train_refund",
+        "missed_connection",
+        "ticket_change",
+        "passenger_name_change",
+        "missing_refund",
+        "payment_without_ticket",
+        "validation_discount_penalty"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "> The change fee for moving from [ORIGINAL_DATE] to [NEW_DATE] is [FEE]. The new ticket will be issued once the fee payment is confirmed. See `policy.change-fees.brackets` for the full schedule."
+    },
+    {
+      "id": "response-examples__06__name-correction-confirmation",
+      "sourceId": "response-examples",
+      "title": "Response examples for common cases",
+      "heading": "Name correction confirmation",
+      "topics": [
+        "delay_refund",
+        "cancelled_train_refund",
+        "missed_connection",
+        "ticket_change",
+        "passenger_name_change",
+        "missing_refund",
+        "payment_without_ticket",
+        "validation_discount_penalty"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "> The spelling correction to the passenger name has been recorded against the original booking. Use the corrected passenger name together with the booking identifier when joining the train."
+    },
+    {
+      "id": "response-examples__07__missing-refund-status",
+      "sourceId": "response-examples",
+      "title": "Response examples for common cases",
+      "heading": "Missing refund status",
+      "topics": [
+        "delay_refund",
+        "cancelled_train_refund",
+        "missed_connection",
+        "ticket_change",
+        "passenger_name_change",
+        "missing_refund",
+        "payment_without_ticket",
+        "validation_discount_penalty"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "> The most recent refund record against the supplied payment identifier shows [STATUS]. If no record exists the case will be routed to the payments queue."
+    },
+    {
+      "id": "response-examples__08__payment-without-ticket",
+      "sourceId": "response-examples",
+      "title": "Response examples for common cases",
+      "heading": "Payment without ticket",
+      "topics": [
+        "delay_refund",
+        "cancelled_train_refund",
+        "missed_connection",
+        "ticket_change",
+        "passenger_name_change",
+        "missing_refund",
+        "payment_without_ticket",
+        "validation_discount_penalty"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "> The captured payment of [AMOUNT] on [DATE] has been matched against [TICKET_NUMBER]. If no ticket matches, the case will be escalated with the payment evidence."
+    },
+    {
+      "id": "response-examples__09__validation-outcome",
+      "sourceId": "response-examples",
+      "title": "Response examples for common cases",
+      "heading": "Validation outcome",
+      "topics": [
+        "delay_refund",
+        "cancelled_train_refund",
+        "missed_connection",
+        "ticket_change",
+        "passenger_name_change",
+        "missing_refund",
+        "payment_without_ticket",
+        "validation_discount_penalty"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "> Based on the supplied discount evidence and the validation rules table, the validation outcome is [ACCEPT_OR_PENALTY]. The reasoning and the validation event identifier are recorded for audit."
+    },
+    {
+      "id": "response-examples__10__escalation-preface",
+      "sourceId": "response-examples",
+      "title": "Response examples for common cases",
+      "heading": "Escalation preface",
+      "topics": [
+        "delay_refund",
+        "cancelled_train_refund",
+        "missed_connection",
+        "ticket_change",
+        "passenger_name_change",
+        "missing_refund",
+        "payment_without_ticket",
+        "validation_discount_penalty"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "> The evidence supplied does not unambiguously resolve the case. I have paused the resolution and routed this to the review queue for human inspection."
+    },
+    {
+      "id": "response-examples__11__forum-reference",
+      "sourceId": "response-examples",
+      "title": "Response examples for common cases",
+      "heading": "Forum reference",
+      "topics": [
+        "delay_refund",
+        "cancelled_train_refund",
+        "missed_connection",
+        "ticket_change",
+        "passenger_name_change",
+        "missing_refund",
+        "payment_without_ticket",
+        "validation_discount_penalty"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "These fragments are derived from internal draft patterns rather than any single customer message. Forum material paraphrased only."
+    },
+    {
+      "id": "response-examples__12__related-references",
+      "sourceId": "response-examples",
+      "title": "Response examples for common cases",
+      "heading": "Related references",
+      "topics": [
+        "delay_refund",
+        "cancelled_train_refund",
+        "missed_connection",
+        "ticket_change",
+        "passenger_name_change",
+        "missing_refund",
+        "payment_without_ticket",
+        "validation_discount_penalty"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "- `policy.refund-rules`\n- `policy.connection-rules`\n- `policy.change-fees`\n- `policy.identity-changes`\n- `policy.missing-refund`\n- `policy.payment-without-ticket`\n- `policy.validation-rules`"
+    },
+    {
+      "id": "ticket-changes__01__summary",
+      "sourceId": "ticket-changes",
+      "title": "Ticket date and route changes",
+      "heading": "Summary",
+      "topics": [
+        "ticket_change"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "Ticket date and route changes are governed by the change-fee schedule in `policy.change-fees`. Same-day route swaps may carry a lower fee than date swaps to a different week."
+    },
+    {
+      "id": "ticket-changes__02__handling-guidance",
+      "sourceId": "ticket-changes",
+      "title": "Ticket date and route changes",
+      "heading": "Handling guidance",
+      "topics": [
+        "ticket_change"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "1. Resolve the current ticket by number; capture the original route, date, fare and passenger details.\n2. Capture the requested new route or date and the reason supplied by the customer.\n3. Look up the matching change-fee bracket from `policy.change-fees.brackets` using the difference between the original and the requested journey date.\n4. Apply a fee waiver only when `policy.change-fees.waiver-conditions` evaluates to `true` for the supplied reason.\n5. Reissue the ticket only after the change-fee payment is confirmed against a new payment identifier."
+    },
+    {
+      "id": "ticket-changes__03__escalate-when",
+      "sourceId": "ticket-changes",
+      "title": "Ticket date and route changes",
+      "heading": "Escalate when",
+      "topics": [
+        "ticket_change"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "- The requested change crosses a tariff boundary not covered by `policy.change-fees.brackets`.\n- The original ticket has a partial journey already recorded against it.\n- The customer asks to change the passenger identity while keeping the journey; route to the passenger-name-change doc instead of handling it here."
+    },
+    {
+      "id": "ticket-changes__04__deterministic-policy-boundary",
+      "sourceId": "ticket-changes",
+      "title": "Ticket date and route changes",
+      "heading": "Deterministic policy boundary",
+      "topics": [
+        "ticket_change"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "`change_fee = max(0, policy.change-fees.brackets[requested_date - original_date])` and `change_fee` waives when `policy.change-fees.waiver-conditions(reason)` is `true`.\n\nBoundary source: `policy.change-fees.brackets` and `policy.change-fees.waiver-conditions`."
+    },
+    {
+      "id": "ticket-changes__05__forum-reference",
+      "sourceId": "ticket-changes",
+      "title": "Ticket date and route changes",
+      "heading": "Forum reference",
+      "topics": [
+        "ticket_change"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "Forum threads typically focus on whether the fee changes for off-peak trains. Paraphrased only."
+    },
+    {
+      "id": "ticket-changes__06__related-references",
+      "sourceId": "ticket-changes",
+      "title": "Ticket date and route changes",
+      "heading": "Related references",
+      "topics": [
+        "ticket_change"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "- `policy.change-fees.brackets`\n- `policy.change-fees.waiver-conditions`\n- `record:ticket:<id>`"
+    },
+    {
+      "id": "validation-discount-penalty__01__summary",
+      "sourceId": "validation-discount-penalty",
+      "title": "Validation, discount and penalty cases",
+      "heading": "Summary",
+      "topics": [
+        "validation_discount_penalty"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "On-train validation cases decide between accepting evidence of discount eligibility and applying a penalty. The decision always references the evidence record and the validation rules table."
+    },
+    {
+      "id": "validation-discount-penalty__02__handling-guidance",
+      "sourceId": "validation-discount-penalty",
+      "title": "Validation, discount and penalty cases",
+      "heading": "Handling guidance",
+      "topics": [
+        "validation_discount_penalty"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "1. Capture the validation event timestamp, the train identifier and the inspector identifier from the case record.\n2. Read the discount evidence referenced by the customer and compare it against the validation rules table.\n3. If the discount evidence satisfies `policy.validation-rules.discount-conditions`, close the case as accepted.\n4. If the discount evidence fails, compute the penalty from `policy.validation-rules.penalty-amounts` and route to the penalty queue.\n5. Always preserve the validation event identifier alongside the resolution for audit."
+    },
+    {
+      "id": "validation-discount-penalty__03__escalate-when",
+      "sourceId": "validation-discount-penalty",
+      "title": "Validation, discount and penalty cases",
+      "heading": "Escalate when",
+      "topics": [
+        "validation_discount_penalty"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "- The discount evidence appears valid but the customer disputes the inspector's reading.\n- The penalty amount exceeds the threshold flagged in `policy.validation-rules.penalty-threshold`.\n- The customer supplies evidence that arrives after the validation event window closed."
+    },
+    {
+      "id": "validation-discount-penalty__04__deterministic-policy-boundary",
+      "sourceId": "validation-discount-penalty",
+      "title": "Validation, discount and penalty cases",
+      "heading": "Deterministic policy boundary",
+      "topics": [
+        "validation_discount_penalty"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "`outcome = accept` when `policy.validation-rules.discount-conditions(evidence)` is `true`, otherwise `outcome = penalty` with `penalty = policy.validation-rules.penalty-amounts[fare_class]`.\n\nBoundary source: `policy.validation-rules.discount-conditions` and `policy.validation-rules.penalty-amounts`."
+    },
+    {
+      "id": "validation-discount-penalty__05__forum-reference",
+      "sourceId": "validation-discount-penalty",
+      "title": "Validation, discount and penalty cases",
+      "heading": "Forum reference",
+      "topics": [
+        "validation_discount_penalty"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "Forum posts typically focus on whether expired student cards still qualify. Material paraphrased only."
+    },
+    {
+      "id": "validation-discount-penalty__06__related-references",
+      "sourceId": "validation-discount-penalty",
+      "title": "Validation, discount and penalty cases",
+      "heading": "Related references",
+      "topics": [
+        "validation_discount_penalty"
+      ],
+      "authority": "demo-policy",
+      "version": 1,
+      "text": "- `policy.validation-rules.discount-conditions`\n- `policy.validation-rules.penalty-amounts`\n- `record:validation:<id>`"
+    }
+  ]
+}
