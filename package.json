@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx --test",
     "baml:generate": "baml-cli generate",
-    "knowledge:index": "echo \"knowledge index builder lands in task 3\" && exit 0"
+    "knowledge:index": "tsx scripts/build-knowledge-index.ts"
   },
   "dependencies": {
     "@boundaryml/baml": "0.203.1",
