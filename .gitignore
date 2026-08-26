@@ -1,0 +1,14 @@
+# dependencies / build
+node_modules/
+.next/
+next-env.d.ts
+*.tsbuildinfo
+
+# secrets — never commit (contains live Neon credentials)
+.env
+.env*.local
+
+# tooling
+.vercel
+.scratch/
+baml_client/
