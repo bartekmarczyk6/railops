@@ -13,5 +13,5 @@ next-env.d.ts
 .scratch/
 baml_client/
 
-# railops local state
+# railops local state (includes Hindsight tombstones under .railops/memory/)
 .railops/
