@@ -6,6 +6,19 @@ generator target {
 }
 
 client<llm> MockClient {
-  provider openai
-  options {}
+  provider openai-generic
+  options {
+    base_url "http://localhost:0/mock"
+    api_key "mock"
+    model "mock-model"
+  }
+}
+
+client<llm> GroqClient {
+  provider openai-generic
+  options {
+    base_url "https://api.groq.com/openai/v1"
+    api_key env.GROQ_API_KEY
+    model env.GROQ_MODEL
+  }
 }
