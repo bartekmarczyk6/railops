@@ -23,7 +23,8 @@ export type CaseState =
   | "rejected"
   | "escalated"
   | "revising"
-  | "learning_saved";
+  | "learning_saved"
+  | "error";
 
 export type PipelineStage =
   | "generating_email"
@@ -53,6 +54,7 @@ export type TraceEvent = {
   durationMs: number | null;
   error: string | null;
   timestamp: string;
+  payload?: unknown;
 };
 
 export type DemoCasePackage = import("../domain/types.js").DemoCasePackage;
