@@ -1,0 +1,3 @@
+class FoundationPlaceholder {
+  status string
+}

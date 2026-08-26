@@ -12,3 +12,6 @@ next-env.d.ts
 .vercel
 .scratch/
 baml_client/
+
+# railops local state
+.railops/
