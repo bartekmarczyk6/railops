@@ -1,0 +1,16 @@
+{
+  "_disclaimer": "synthetic",
+  "recordedAt": "2026-08-20T08:05:00.000Z",
+  "cassetteId": "krakow-warszawa-2026-09-02",
+  "route": {
+    "id": "33333333-3333-4333-8333-333333333333",
+    "origin": "Krakow Glowny",
+    "destination": "Warszawa Centralna",
+    "scheduledDeparture": "2026-09-02T08:15:00.000Z",
+    "scheduledArrival": "2026-09-02T11:30:00.000Z",
+    "actualDeparture": "2026-09-02T08:15:00.000Z",
+    "actualArrival": "2026-09-02T11:30:00.000Z",
+    "operator": "PKP Intercity"
+  },
+  "disruption": null
+}
