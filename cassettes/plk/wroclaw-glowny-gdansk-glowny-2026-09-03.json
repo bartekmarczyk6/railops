@@ -1,0 +1,24 @@
+{
+  "_disclaimer": "synthetic",
+  "recordedAt": "2026-08-20T08:10:00.000Z",
+  "cassetteId": "wroclaw-gdansk-2026-09-03",
+  "route": {
+    "id": "44444444-4444-4444-8444-444444444444",
+    "origin": "Wroclaw Glowny",
+    "destination": "Gdansk Glowny",
+    "scheduledDeparture": "2026-09-03T06:00:00.000Z",
+    "scheduledArrival": "2026-09-03T13:15:00.000Z",
+    "actualDeparture": "2026-09-03T06:00:00.000Z",
+    "actualArrival": "2026-09-03T13:15:00.000Z",
+    "operator": "PKP Intercity"
+  },
+  "disruption": {
+    "id": "55555555-5555-4555-8555-555555555555",
+    "routeId": "44444444-4444-4444-8444-444444444444",
+    "type": "missed_connection",
+    "scheduledDelayMinutes": 0,
+    "actualDelayMinutes": 0,
+    "cause": "earlier rolling-stock defect",
+    "reportedAt": "2026-09-03T05:45:00.000Z"
+  }
+}
