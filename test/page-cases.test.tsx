@@ -1,19 +1,25 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
-import { createElement } from "react";
+import { createElement, type ComponentProps } from "react";
 
 process.env.RAILOPS_DATA_DIR ??= "";
 process.env.RAILOPS_FAKE_LLM ??= "1";
 
 import { Dashboard } from "../components/dashboard.tsx";
-import { CreateCaseDialog } from "../components/cases/create-case-dialog.tsx";
+import {
+  CreateCaseDialog,
+  CreateCaseForm,
+  TOPIC_OPTIONS,
+  TRUTH_MODE_OPTIONS,
+} from "../components/cases/create-case-dialog.tsx";
 import { EmptyOnboarding } from "../components/cases/empty-onboarding.tsx";
 import { CaseList } from "../components/cases/case-list.tsx";
 import { CaseStatusPill } from "../components/cases/case-status.tsx";
 import { ReviewerAlignmentChart } from "../components/charts/reviewer-alignment-chart.tsx";
 import { OutcomeDistributionChart } from "../components/charts/outcome-distribution-chart.tsx";
 import { computeDashboardData, type DashboardData } from "../app/dashboard-data.ts";
+import { Dialog } from "../components/ui/dialog.tsx";
 import type { StoredCase } from "../lib/storage/types.ts";
 
 function makeCase(overrides: Partial<StoredCase> = {}): StoredCase {
@@ -84,6 +90,20 @@ function dataFor(cases: StoredCase[]): DashboardData {
   return computeDashboardData(cases);
 }
 
+function renderForm(props: ComponentProps<typeof CreateCaseForm>): string {
+  // CreateCaseForm renders DialogPanel/DialogFooter sections, which require
+  // a Dialog root context — wrap it exactly as CreateCaseDialog does.
+  return renderToStaticMarkup(
+    createElement(Dialog, { open: true }, createElement(CreateCaseForm, props)),
+  );
+}
+
+function submitButtonTag(html: string): string {
+  const match = html.match(/<button[^>]*data-testid="create-submit"[^>]*>/);
+  assert.ok(match, "submit button must be rendered");
+  return match[0];
+}
+
 test("empty state: 0 cases renders onboarding with Create demo case button", () => {
   const html = renderToStaticMarkup(createElement(Dashboard, { data: dataFor([]) }));
   assert.match(html, /Demo Cases/);
@@ -91,24 +111,43 @@ test("empty state: 0 cases renders onboarding with Create demo case button", () 
   assert.match(html, /Synthetic/);
   assert.match(html, /data-testid="empty-onboarding"/);
   assert.doesNotMatch(html, /data-testid="case-row-/);
+  assert.doesNotMatch(html, /data-testid="dashboard-charts"/);
 });
 
 test("empty onboarding exposes primary CTA and a three-step tour", () => {
   const html = renderToStaticMarkup(createElement(EmptyOnboarding, { onCreate: () => {} }));
   assert.match(html, /Create demo case/);
+  assert.match(html, /Synthetic data only/);
   const tourSteps = html.match(/data-tour-step="/g) ?? [];
   assert.equal(tourSteps.length, 3, "must show three tour steps");
 });
 
-test("create dialog: opens with exactly two labelled dropdowns, submit disabled until both are set", () => {
-  const html = renderToStaticMarkup(
-    createElement(CreateCaseDialog, { open: true, onCreated: () => {} }),
-  );
-  const labels = html.match(/data-select-for="(topic|truthMode)"/g) ?? [];
-  assert.equal(labels.length, 2, "must render exactly two labelled dropdowns");
+test("create dialog option lists cover all topic and truth mode values", () => {
+  assert.equal(TOPIC_OPTIONS.length, 8, "must offer all 8 CaseTopic values");
+  assert.equal(TRUTH_MODE_OPTIONS.length, 4, "must offer all 4 TruthMode values");
+  for (const opt of [...TOPIC_OPTIONS, ...TRUTH_MODE_OPTIONS]) {
+    assert.ok(opt.description.length > 0, `${opt.value} needs descriptive text`);
+  }
+});
+
+test("create form: exactly two labelled selects, submit disabled until both are set", () => {
+  const html = renderForm({ onCreated: () => {} });
+  const selects = html.match(/data-select-for="(topic|truthMode)"/g) ?? [];
+  assert.equal(selects.length, 2, "must render exactly two selects");
   assert.match(html, /data-testid="topic-select"/);
   assert.match(html, /data-testid="truthmode-select"/);
-  assert.match(html, /data-testid="create-submit"[^>]*disabled/);
+  assert.match(html, />Topic</);
+  assert.match(html, />Truth mode</);
+  assert.match(submitButtonTag(html), /\sdisabled=""/, "submit starts disabled");
+});
+
+test("create form: submit enabled once topic and truth mode are chosen", () => {
+  const html = renderForm({
+    onCreated: () => {},
+    initialTopic: "delay_refund",
+    initialTruthMode: "fabricated_delay",
+  });
+  assert.doesNotMatch(submitButtonTag(html), /\sdisabled=""/);
 });
 
 test("case list: each row shows id, topic, truth mode, status, reviewer outcome, learning state, created time", () => {
@@ -126,13 +165,31 @@ test("case list: each row shows id, topic, truth mode, status, reviewer outcome,
   assert.match(html, /data-testid="case-row-c-1"/);
   assert.match(html, /data-testid="case-row-c-2"/);
   assert.match(html, /data-testid="created-time-c-1"/);
+  assert.match(html, /Pending/);
+  assert.match(html, /No learning yet/);
+});
+
+test("case list: loading and error states each offer a next action", () => {
+  const loading = renderToStaticMarkup(
+    createElement(CaseList, { cases: [], onOpen: () => {}, loading: true }),
+  );
+  assert.match(loading, /data-testid="case-list-loading"/);
+  assert.match(loading, /Retry/);
+
+  const error = renderToStaticMarkup(
+    createElement(CaseList, { cases: [], onOpen: () => {}, error: "Boom" }),
+  );
+  assert.match(error, /data-testid="case-list-error"/);
+  assert.match(error, /Boom/);
+  assert.match(error, /Reload the page/);
 });
 
 test("case status pill: icon + text, not color alone", () => {
   const html = renderToStaticMarkup(createElement(CaseStatusPill, { state: "reviewable" }));
   assert.match(html, /aria-label="Case is ready for review"/);
   assert.match(html, /Reviewable/);
-  assert.match(html, /data-icon="check"/);
+  assert.match(html, /data-icon="inbox"/);
+  assert.match(html, /<svg/);
 });
 
 test("reviewer alignment chart: hidden when no reviewed cases exist", () => {
@@ -140,7 +197,7 @@ test("reviewer alignment chart: hidden when no reviewed cases exist", () => {
   assert.equal(html.trim(), "", "must render nothing when there is no data");
 });
 
-test("reviewer alignment chart: renders SVG and accessible table summary when at least one point exists", () => {
+test("reviewer alignment chart: renders chart and accessible table summary when at least one point exists", () => {
   const html = renderToStaticMarkup(
     createElement(ReviewerAlignmentChart, {
       data: [
@@ -150,10 +207,12 @@ test("reviewer alignment chart: renders SVG and accessible table summary when at
       ],
     }),
   );
-  assert.match(html, /<svg/);
+  // recharts draws the <svg> after client-side measurement; the SSR output
+  // carries the chart wrapper plus the exact-value accessible summary.
+  assert.match(html, /recharts-wrapper/);
   assert.match(html, /class="sr-only"/);
   assert.match(html, /Reviewer alignment over case sequence/);
-  assert.match(html, /0\.8/);
+  assert.match(html, /0\.80/);
 });
 
 test("outcome distribution chart: hidden when no reviewed cases exist", () => {
@@ -161,19 +220,19 @@ test("outcome distribution chart: hidden when no reviewed cases exist", () => {
   assert.equal(html.trim(), "");
 });
 
-test("outcome distribution chart: renders SVG and accessible table summary", () => {
+test("outcome distribution chart: renders chart, exact counts and accessible table summary", () => {
   const html = renderToStaticMarkup(
     createElement(OutcomeDistributionChart, {
       data: [
         { outcome: "refund", count: 3 },
-        { outcome: "information", count: 2 },
+        { outcome: "denied", count: 2 },
       ],
     }),
   );
-  assert.match(html, /<svg/);
+  assert.match(html, /recharts-wrapper/);
   assert.match(html, /class="sr-only"/);
   assert.match(html, /Outcome distribution/);
-  assert.match(html, /refund/);
+  assert.match(html, /Refund/);
   assert.match(html, /3/);
   assert.match(html, /2/);
 });
@@ -202,6 +261,7 @@ test("dashboard renders cases, status pills, and both charts when reviewed cases
   const html = renderToStaticMarkup(createElement(Dashboard, { data: dataFor(cases) }));
   assert.match(html, /data-testid="case-row-c-1"/);
   assert.match(html, /data-testid="case-row-c-2"/);
+  assert.match(html, /data-testid="dashboard-charts"/);
   assert.match(html, /Reviewer alignment over case sequence/);
   assert.match(html, /Outcome distribution/);
 });
@@ -209,6 +269,15 @@ test("dashboard renders cases, status pills, and both charts when reviewed cases
 test("dashboard hides charts when zero reviewed cases", () => {
   const cases = [makeCase({ caseId: "c-1", state: "created" })];
   const html = renderToStaticMarkup(createElement(Dashboard, { data: dataFor(cases) }));
+  assert.doesNotMatch(html, /data-testid="dashboard-charts"/);
   assert.doesNotMatch(html, /Reviewer alignment over case sequence/);
   assert.doesNotMatch(html, /Outcome distribution/);
+  assert.match(html, /data-testid="dashboard-charts-empty"/);
+});
+
+test("create dialog: renders without crashing when closed", () => {
+  const html = renderToStaticMarkup(
+    createElement(CreateCaseDialog, { open: false, onOpenChange: () => {}, onCaseCreated: () => {} }),
+  );
+  assert.equal(typeof html, "string");
 });

@@ -1,103 +1,83 @@
+"use client";
+
+import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
+
+import {
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from "../ui/chart.tsx";
 import type { AlignmentPoint } from "../../app/dashboard-data.ts";
 
 export type ReviewerAlignmentChartProps = {
   data: readonly AlignmentPoint[];
 };
 
-const WIDTH = 360;
-const HEIGHT = 180;
-const PAD_LEFT = 40;
-const PAD_RIGHT = 12;
-const PAD_TOP = 16;
-const PAD_BOTTOM = 28;
+const chartConfig = {
+  alignment: {
+    label: "Alignment",
+    color: "var(--primary)",
+  },
+} satisfies ChartConfig;
 
 export function ReviewerAlignmentChart({ data }: ReviewerAlignmentChartProps) {
   if (data.length === 0) return null;
-  const innerW = WIDTH - PAD_LEFT - PAD_RIGHT;
-  const innerH = HEIGHT - PAD_TOP - PAD_BOTTOM;
-  const maxSeq = Math.max(1, data[data.length - 1]?.caseSeq ?? 1);
-  const xFor = (seq: number) => PAD_LEFT + ((seq - 1) / Math.max(1, maxSeq - 1)) * innerW;
-  const yFor = (a: number) => PAD_TOP + (1 - a) * innerH;
-  const points = data
-    .map((p) => `${xFor(p.caseSeq).toFixed(1)},${yFor(p.alignment).toFixed(1)}`)
-    .join(" ");
-  const xTicks = buildTicks(1, maxSeq, 5);
-  const yTicks = [0, 0.25, 0.5, 0.75, 1];
 
   return (
     <figure
       data-testid="reviewer-alignment-chart"
-      className="flex flex-col gap-2"
       aria-label="Reviewer alignment over case sequence"
+      className="flex flex-col gap-2"
     >
-      <figcaption className="text-sm font-bold text-[color:var(--text)]">
-        Reviewer alignment over case sequence
-      </figcaption>
-      <svg
-        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-        width="100%"
-        height={HEIGHT}
-        role="img"
-        aria-label={`Line chart of reviewer alignment across ${data.length} reviewed cases`}
-      >
-        {yTicks.map((t) => (
-          <g key={t}>
-            <line
-              x1={PAD_LEFT}
-              x2={WIDTH - PAD_RIGHT}
-              y1={yFor(t)}
-              y2={yFor(t)}
-              stroke="var(--border)"
-              strokeWidth={1}
-            />
-            <text
-              x={PAD_LEFT - 6}
-              y={yFor(t) + 4}
-              textAnchor="end"
-              fontSize={10}
-              fill="var(--text-muted)"
-            >
-              {t.toFixed(2)}
-            </text>
-          </g>
-        ))}
-        {xTicks.map((t) => (
-          <g key={`x-${t}`}>
-            <line
-              x1={xFor(t)}
-              x2={xFor(t)}
-              y1={PAD_TOP}
-              y2={HEIGHT - PAD_BOTTOM}
-              stroke="var(--border)"
-              strokeWidth={1}
-            />
-            <text
-              x={xFor(t)}
-              y={HEIGHT - PAD_BOTTOM + 14}
-              textAnchor="middle"
-              fontSize={10}
-              fill="var(--text-muted)"
-            >
-              {t}
-            </text>
-          </g>
-        ))}
-        <polyline
-          points={points}
-          fill="none"
-          stroke="var(--primary)"
-          strokeWidth={2}
-        />
-        {data.map((p) => (
-          <circle
-            key={p.caseSeq}
-            cx={xFor(p.caseSeq)}
-            cy={yFor(p.alignment)}
-            r={3}
-            fill="var(--primary)"
+      <ChartContainer config={chartConfig} className="aspect-auto h-45 w-full">
+        <LineChart
+          accessibilityLayer
+          data={[...data]}
+          margin={{ top: 12, right: 12, bottom: 0, left: 0 }}
+        >
+          <CartesianGrid vertical={false} strokeDasharray="3 3" />
+          <XAxis
+            dataKey="caseSeq"
+            type="number"
+            domain={["dataMin", "dataMax"]}
+            allowDecimals={false}
+            tickLine={false}
+            axisLine={false}
+            tickMargin={8}
           />
-        ))}
-      </svg>
+          <YAxis
+            domain={[0, 1]}
+            ticks={[0, 0.5, 1]}
+            tickLine={false}
+            axisLine={false}
+            width={32}
+            tickFormatter={(value: number) => value.toFixed(1)}
+          />
+          <ChartTooltip
+            cursor={false}
+            content={
+              <ChartTooltipContent
+                indicator="dot"
+                labelFormatter={(value) => `Case ${value}`}
+                formatter={(value) => (
+                  <span className="text-foreground font-semibold tabular-nums">
+                    {Number(value).toFixed(2)}
+                  </span>
+                )}
+              />
+            }
+          />
+          <Line
+            dataKey="alignment"
+            type="linear"
+            stroke="var(--color-alignment)"
+            strokeWidth={2}
+            dot={{ r: 3, fill: "var(--color-alignment)", strokeWidth: 0 }}
+            activeDot={{ r: 4 }}
+          />
+        </LineChart>
+      </ChartContainer>
       <table className="sr-only">
         <caption>Reviewer alignment over case sequence</caption>
         <thead>
@@ -117,14 +97,4 @@ export function ReviewerAlignmentChart({ data }: ReviewerAlignmentChartProps) {
       </table>
     </figure>
   );
-}
-
-function buildTicks(min: number, max: number, target: number): number[] {
-  if (max <= min) return [min];
-  const range = max - min;
-  const step = Math.max(1, Math.round(range / Math.max(1, target - 1)));
-  const ticks: number[] = [];
-  for (let v = min; v <= max; v += step) ticks.push(v);
-  if (ticks[ticks.length - 1] !== max) ticks.push(max);
-  return ticks;
 }

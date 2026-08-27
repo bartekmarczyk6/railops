@@ -1,75 +1,163 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Dialog } from "../ui/dialog.tsx";
-import { Field } from "../ui/field.tsx";
-import { Select } from "../ui/select.tsx";
+import { useContext, useEffect, useRef, useState } from "react";
+import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
+
 import { Button } from "../ui/button.tsx";
+import {
+  Dialog,
+  DialogClose,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+} from "../ui/dialog.tsx";
+import { Field, FieldLabel } from "../ui/field.tsx";
+import {
+  Select,
+  SelectItem,
+  SelectPopup,
+  SelectTrigger,
+  SelectValue,
+} from "../ui/select.tsx";
+import { toastManager } from "../ui/toast.tsx";
+import { StatefulButton } from "../motion/button/stateful.tsx";
 
-const TOPIC_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
-  { value: "", label: "Choose a topic" },
-  { value: "delay_refund", label: "Delay refund" },
-  { value: "cancelled_train_refund", label: "Cancelled train refund" },
-  { value: "missed_connection", label: "Missed connection" },
-  { value: "ticket_change", label: "Ticket change" },
-  { value: "passenger_name_change", label: "Passenger name change" },
-  { value: "missing_refund", label: "Missing refund" },
-  { value: "payment_without_ticket", label: "Payment without ticket" },
-  { value: "validation_discount_penalty", label: "Validation discount penalty" },
-];
-
-const TRUTH_MODE_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
-  { value: "", label: "Choose a truth mode" },
-  { value: "supported_by_records", label: "Supported by records" },
-  { value: "fabricated_delay", label: "Fabricated delay" },
-  { value: "fraud_attempt", label: "Fraud attempt" },
-  { value: "insufficient_information", label: "Insufficient information" },
-];
-
-export type CreateCaseDialogProps = {
-  open?: boolean;
-  onOpenChange?: (open: boolean) => void;
-  onCreated: (caseId: string) => void;
-  fetchImpl?: (url: string, init: { method: string; headers: Record<string, string>; body: string }) => Promise<Response>;
+export type TopicOption = {
+  value: string;
+  label: string;
+  description: string;
 };
 
-const defaultFetch: NonNullable<CreateCaseDialogProps["fetchImpl"]> = (url, init) =>
-  fetch(url, init);
+export const TOPIC_OPTIONS: ReadonlyArray<TopicOption> = [
+  {
+    value: "delay_refund",
+    label: "Delay refund",
+    description: "The train arrived late and the passenger claims compensation.",
+  },
+  {
+    value: "cancelled_train_refund",
+    label: "Cancelled train refund",
+    description: "The train was cancelled and the passenger wants the fare back.",
+  },
+  {
+    value: "missed_connection",
+    label: "Missed connection",
+    description: "A delayed first leg made the passenger miss a transfer.",
+  },
+  {
+    value: "ticket_change",
+    label: "Ticket change",
+    description: "The passenger wants to move the ticket to another day or time.",
+  },
+  {
+    value: "passenger_name_change",
+    label: "Passenger name change",
+    description: "The passenger asks to correct the name on the ticket.",
+  },
+  {
+    value: "missing_refund",
+    label: "Missing refund",
+    description: "A refund was promised but the passenger says it never arrived.",
+  },
+  {
+    value: "payment_without_ticket",
+    label: "Payment without ticket",
+    description: "The account was charged but no ticket was ever issued.",
+  },
+  {
+    value: "validation_discount_penalty",
+    label: "Validation discount penalty",
+    description: "A penalty fare is disputed over an unvalidated discount.",
+  },
+];
 
-export function CreateCaseDialog({
-  open: controlledOpen,
-  onOpenChange,
+export const TRUTH_MODE_OPTIONS: ReadonlyArray<TopicOption> = [
+  {
+    value: "supported_by_records",
+    label: "Supported by records",
+    description: "The claim matches the ticket, payment and operations records.",
+  },
+  {
+    value: "fabricated_delay",
+    label: "Fabricated delay",
+    description: "The claimed delay does not match the real operations data.",
+  },
+  {
+    value: "fraud_attempt",
+    label: "Fraud attempt",
+    description: "Records contradict the claim and show fraud indicators.",
+  },
+  {
+    value: "insufficient_information",
+    label: "Insufficient information",
+    description: "Key records are missing, so the claim cannot be verified.",
+  },
+];
+
+type FetchImpl = (
+  url: string,
+  init: { method: string; headers: Record<string, string>; body: string },
+) => Promise<Response>;
+
+const defaultFetch: FetchImpl = (url, init) => fetch(url, init);
+
+type FormStatus = "idle" | "loading" | "success" | "error";
+
+export type CreateCaseFormProps = {
+  onCreated: (caseId: string) => void;
+  fetchImpl?: FetchImpl;
+  initialTopic?: string;
+  initialTruthMode?: string;
+};
+
+export function CreateCaseForm({
   onCreated,
   fetchImpl = defaultFetch,
-}: CreateCaseDialogProps) {
-  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
-  const isControlled = controlledOpen !== undefined;
-  const open = isControlled ? controlledOpen : uncontrolledOpen;
-  const setOpen = (next: boolean) => {
-    if (!isControlled) setUncontrolledOpen(next);
-    onOpenChange?.(next);
-  };
-
-  const [topic, setTopic] = useState("");
-  const [truthMode, setTruthMode] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  initialTopic = "",
+  initialTruthMode = "",
+}: CreateCaseFormProps) {
+  const [topic, setTopic] = useState(initialTopic);
+  const [truthMode, setTruthMode] = useState(initialTruthMode);
+  const [status, setStatus] = useState<FormStatus>("idle");
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!open) {
-      setTopic("");
-      setTruthMode("");
-      setError(null);
-      setSubmitting(false);
-    }
-  }, [open]);
+  const busy = status === "loading";
+  const canSubmit = topic !== "" && truthMode !== "" && !busy;
 
-  const canSubmit = topic !== "" && truthMode !== "" && !submitting;
+  if (status === "success") {
+    return (
+      <DialogPanel
+        data-testid="create-success"
+        className="flex flex-col items-center gap-4 py-8 text-center"
+      >
+        <span className="t-success-check" data-state="in" aria-hidden="true">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="var(--primary)"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="size-12"
+          >
+            <path d="M20 6 9 17l-5-5" />
+          </svg>
+        </span>
+        <p className="font-bold text-[color:var(--text)]">Case created</p>
+        <p className="text-sm text-[color:var(--text-muted)]">
+          Opening the review workspace…
+        </p>
+      </DialogPanel>
+    );
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!canSubmit) return;
-    setSubmitting(true);
+    setStatus("loading");
     setError(null);
     try {
       const res = await fetchImpl("/api/cases", {
@@ -79,63 +167,76 @@ export function CreateCaseDialog({
       });
       if (!res.ok) {
         setError("Could not create the case. Please try again.");
-        setSubmitting(false);
+        setStatus("error");
         return;
       }
       const data = (await res.json()) as { caseId?: string };
       if (typeof data.caseId !== "string" || data.caseId.length === 0) {
         setError("The server did not return a case id.");
-        setSubmitting(false);
+        setStatus("error");
         return;
       }
-      setOpen(false);
+      setStatus("success");
       onCreated(data.caseId);
     } catch {
       setError("Network error. Please try again.");
-      setSubmitting(false);
+      setStatus("error");
     }
   }
 
   return (
-    <Dialog
-      open={open}
-      onClose={() => setOpen(false)}
-      title="Create demo case"
-      description="Pick a topic and truth mode. A synthetic case is generated locally."
-    >
-      <form onSubmit={handleSubmit} className="flex flex-col gap-4" data-testid="create-case-form">
-        <Field id="topic" label="Topic">
+    <form className="contents" onSubmit={handleSubmit} data-testid="create-case-form">
+      <DialogPanel className="flex flex-col gap-4">
+        <Field>
+          <FieldLabel>Topic</FieldLabel>
           <Select
-            id="topic"
-            data-testid="topic-select"
-            data-select-for="topic"
-            value={topic}
-            onChange={(e) => setTopic(e.target.value)}
-            disabled={submitting}
-            aria-label="Case topic"
+            items={TOPIC_OPTIONS}
+            value={topic === "" ? null : topic}
+            onValueChange={(value: string | null) => setTopic(value ?? "")}
+            disabled={busy}
+            name="topic"
           >
-            {TOPIC_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
+            <SelectTrigger data-testid="topic-select" data-select-for="topic">
+              <SelectValue placeholder="Choose a topic" />
+            </SelectTrigger>
+            <SelectPopup>
+              {TOPIC_OPTIONS.map((item) => (
+                <SelectItem key={item.value} value={item.value}>
+                  <span className="flex flex-col gap-0.5">
+                    <span>{item.label}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {item.description}
+                    </span>
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectPopup>
           </Select>
         </Field>
-        <Field id="truthMode" label="Truth mode">
+        <Field>
+          <FieldLabel>Truth mode</FieldLabel>
           <Select
-            id="truthMode"
-            data-testid="truthmode-select"
-            data-select-for="truthMode"
-            value={truthMode}
-            onChange={(e) => setTruthMode(e.target.value)}
-            disabled={submitting}
-            aria-label="Case truth mode"
+            items={TRUTH_MODE_OPTIONS}
+            value={truthMode === "" ? null : truthMode}
+            onValueChange={(value: string | null) => setTruthMode(value ?? "")}
+            disabled={busy}
+            name="truthMode"
           >
-            {TRUTH_MODE_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
+            <SelectTrigger data-testid="truthmode-select" data-select-for="truthMode">
+              <SelectValue placeholder="Choose a truth mode" />
+            </SelectTrigger>
+            <SelectPopup>
+              {TRUTH_MODE_OPTIONS.map((item) => (
+                <SelectItem key={item.value} value={item.value}>
+                  <span className="flex flex-col gap-0.5">
+                    <span>{item.label}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {item.description}
+                    </span>
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectPopup>
           </Select>
         </Field>
         {error ? (
@@ -143,27 +244,79 @@ export function CreateCaseDialog({
             {error}
           </p>
         ) : null}
-        <div className="mt-2 flex items-center justify-end gap-2">
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => setOpen(false)}
-            disabled={submitting}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            data-testid="create-submit"
-            disabled={!canSubmit}
-            aria-disabled={!canSubmit}
-          >
-            {submitting ? "Creating" : "Create case"}
-          </Button>
-        </div>
-      </form>
-    </Dialog>
+      </DialogPanel>
+      <DialogFooter>
+        <DialogClose render={<Button variant="ghost" />} disabled={busy}>
+          Cancel
+        </DialogClose>
+        <StatefulButton
+          type="submit"
+          data-testid="create-submit"
+          state={status === "error" ? "error" : busy ? "loading" : "idle"}
+          disabled={!canSubmit}
+          loadingText="Creating case"
+          errorText="Try again"
+        >
+          Create case
+        </StatefulButton>
+      </DialogFooter>
+    </form>
   );
 }
 
-export { TOPIC_OPTIONS, TRUTH_MODE_OPTIONS };
+export type CreateCaseDialogProps = {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCaseCreated?: (caseId: string) => void;
+  fetchImpl?: FetchImpl;
+};
+
+export function CreateCaseDialog({
+  open,
+  onOpenChange,
+  onCaseCreated,
+  fetchImpl,
+}: CreateCaseDialogProps) {
+  const router = useContext(AppRouterContext);
+  const navigateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (navigateTimer.current) clearTimeout(navigateTimer.current);
+    },
+    [],
+  );
+
+  function handleCreated(caseId: string) {
+    toastManager.add({
+      type: "success",
+      title: "Case created",
+      description: "Opening the review workspace",
+    });
+    navigateTimer.current = setTimeout(() => {
+      if (onCaseCreated) {
+        onCaseCreated(caseId);
+        return;
+      }
+      if (router) {
+        router.push(`/case/${caseId}`);
+      } else if (typeof window !== "undefined") {
+        window.location.assign(`/case/${caseId}`);
+      }
+    }, 900);
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogPopup>
+        <DialogHeader>
+          <DialogTitle>Create demo case</DialogTitle>
+          <DialogDescription>
+            Pick a topic and a truth mode. A synthetic case is generated locally.
+          </DialogDescription>
+        </DialogHeader>
+        <CreateCaseForm onCreated={handleCreated} fetchImpl={fetchImpl} />
+      </DialogPopup>
+    </Dialog>
+  );
+}
