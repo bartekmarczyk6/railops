@@ -1,54 +1,60 @@
 import { NextResponse } from "next/server";
 
-import { readState } from "@/lib/storage/store.ts";
 import { getLlmClient } from "@/lib/pipeline/llm-resolver.ts";
 import { rewriteResponseText } from "@/lib/llm/baml.ts";
-import { getDataDir } from "@/app/api/_shared/data-dir.ts";
+import { isCaseTopic, isTruthMode } from "@/app/api/_shared/validation.ts";
 
 type Params = { id: string };
 
-function badRequest(): Response {
-  return NextResponse.json({ error: "invalid_input" }, { status: 400 });
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
+function badRequest(error: string): Response {
+  return NextResponse.json({ error }, { status: 400 });
+}
+
+function isValidAccount(value: unknown): value is { fullName: string; email: string } {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const account = value as Record<string, unknown>;
+  return (
+    typeof account.fullName === "string" && account.fullName.trim().length > 0 &&
+    typeof account.email === "string" && account.email.trim().length > 0
+  );
 }
 
 export async function POST(
   request: Request,
-  context: { params: Promise<Params> },
+  _context: { params: Promise<Params> },
 ): Promise<Response> {
-  const { id } = await context.params;
-  const state = await readState({ dataDir: getDataDir() });
-  const stored = state.cases.find((c) => c.caseId === id);
-  if (!stored) {
-    return NextResponse.json({ error: "case_not_found" }, { status: 404 });
-  }
-
   let raw: unknown;
   try {
     raw = await request.json();
   } catch {
-    return badRequest();
+    return badRequest("invalid_body");
   }
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    return badRequest();
+    return badRequest("invalid_body");
   }
   const body = raw as Record<string, unknown>;
-  const { selection, instruction, response } = body;
+  const { selection, instruction, response, topic, truthMode, account } = body;
   if (
     typeof selection !== "string" || selection.trim().length === 0 ||
     typeof instruction !== "string" || instruction.trim().length === 0 ||
-    typeof response !== "string" || response.trim().length === 0
+    typeof response !== "string" || response.trim().length === 0 ||
+    !isCaseTopic(topic) ||
+    !isTruthMode(truthMode) ||
+    !isValidAccount(account)
   ) {
-    return badRequest();
+    return badRequest("invalid_input");
   }
 
   const contextJson = JSON.stringify({
     response,
-    caseId: id,
-    topic: stored.topic,
-    truthMode: stored.truthMode,
+    topic,
+    truthMode,
     account: {
-      fullName: stored.pkg.account.fullName,
-      email: stored.pkg.account.email,
+      fullName: account.fullName,
+      email: account.email,
     },
   });
 
