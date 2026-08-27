@@ -11,6 +11,21 @@ import type {
 } from "@/lib/llm/types.ts";
 import type { LearningRecord } from "@/lib/memory/types.ts";
 import type { ReviewInput } from "@/lib/pipeline/review.ts";
+import {
+  buildReviewInput,
+  emptyFormState,
+  type ReviewFormState,
+} from "@/lib/review-form.ts";
+import { Button } from "@/components/ui/button";
+import {
+  Sheet,
+  SheetDescription,
+  SheetHeader,
+  SheetPanel,
+  SheetPopup,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
 
 import { CaseHeader } from "./case-header.tsx";
 import { RecommendationCard } from "./recommendation-card.tsx";
@@ -19,8 +34,8 @@ import { RecordPanels } from "./record-panels.tsx";
 import { KnowledgePanel, type KnowledgeExcerptView } from "./knowledge-panel.tsx";
 import { ApprovalCard } from "./approval-card.tsx";
 import { LearningResult } from "./learning-result.tsx";
-import { DraftDiff } from "./draft-diff.tsx";
 import { ThinkingState } from "@/components/trace/thinking-state.tsx";
+import { EventTimeline } from "@/components/trace/event-timeline.tsx";
 import { RawEvidenceSheet } from "@/components/trace/raw-evidence-sheet.tsx";
 
 export type CaseReviewPageProps = {
@@ -63,20 +78,40 @@ export function CaseReviewPage(props: CaseReviewPageProps): React.JSX.Element {
     onUndoLearning,
   } = props;
 
-  const [editedDraft, setEditedDraft] = useState<DecisionDraft | null>(null);
+  const [currentCase, setCurrentCase] = useState<StoredCase>(caseData);
   const [lastError, setLastError] = useState<string | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<TraceEvent | null>(null);
-  const [currentCase, setCurrentCase] = useState<StoredCase>(caseData);
+  const [form, setForm] = useState<ReviewFormState>(() => emptyFormState(decision));
+  const [editing, setEditing] = useState(false);
+  const [pending, setPending] = useState(false);
 
-  async function handleAction(input: ReviewInput): Promise<void> {
-    setLastError(null);
-    const res = await onReviewAction(input);
-    if (res.error) {
-      setLastError(res.error);
-      return;
+  async function runAction(action: "approve" | "reject" | "edit"): Promise<boolean> {
+    const result = buildReviewInput({
+      action,
+      caseId: currentCase.caseId,
+      version: currentCase.version,
+      form,
+      baseDraft: decision,
+    });
+    if (!result.ok) {
+      setLastError(result.error);
+      return false;
     }
-    if (res.case) {
-      setCurrentCase(res.case);
+    setLastError(null);
+    setPending(true);
+    try {
+      const res = await onReviewAction(result.value);
+      if (res.error) {
+        setLastError(res.error);
+        return false;
+      }
+      if (res.case) {
+        setCurrentCase(res.case);
+        setEditing(false);
+      }
+      return true;
+    } finally {
+      setPending(false);
     }
   }
 
@@ -85,13 +120,7 @@ export function CaseReviewPage(props: CaseReviewPageProps): React.JSX.Element {
       data-component="case-review-page"
       data-case-id={caseData.caseId}
       data-case-state={currentCase.state}
-      style={{
-        display: "grid",
-        gap: "var(--space-4)",
-        padding: "var(--space-4)",
-        maxWidth: "1280px",
-        margin: "0 auto",
-      }}
+      className="mx-auto grid w-full max-w-320 gap-4 p-4"
     >
       <CaseHeader caseData={currentCase} />
       <RecommendationCard
@@ -106,20 +135,29 @@ export function CaseReviewPage(props: CaseReviewPageProps): React.JSX.Element {
       />
       <ApprovalCard
         state={currentCase.state}
-        caseId={currentCase.caseId}
-        version={currentCase.version}
         decision={decision}
-        onAction={handleAction}
+        form={form}
+        onFormChange={setForm}
+        editing={editing}
+        onStartEdit={() => setEditing(true)}
+        onCancelEdit={() => {
+          setEditing(false);
+          setForm((f) => ({ ...f, editedDraft: { ...decision } }));
+        }}
+        onSaveEdit={() => runAction("edit")}
+        onApprove={() => runAction("approve")}
+        onReject={() => runAction("reject")}
+        pending={pending}
         lastError={lastError}
       />
       <EmailPanel
         email={email}
         claims={claims}
         decision={decision}
-        editedDraft={editedDraft}
-        onChangeEditedDraft={setEditedDraft}
+        editing={editing}
+        editedDraft={form.editedDraft}
+        onChangeEditedDraft={(next) => setForm((f) => ({ ...f, editedDraft: next }))}
       />
-      {editedDraft ? <DraftDiff base={decision} edited={editedDraft} /> : null}
       <RecordPanels pkg={caseData.pkg} priorHistory={priorHistory} />
       <KnowledgePanel staticKnowledge={knowledge} hindsightLearning={hindsight.map(toHindsightView)} />
       <LearningResult
@@ -128,8 +166,26 @@ export function CaseReviewPage(props: CaseReviewPageProps): React.JSX.Element {
         reviewed={currentCase.reviewHistory.length > 0}
         onUndo={onUndoLearning}
       />
-      <ThinkingState events={caseData.trace} onSelectEvent={setSelectedEvent} />
-      <RawEvidenceSheet event={selectedEvent} />
+      <div className="hidden md:block">
+        <ThinkingState events={currentCase.trace} onSelectEvent={setSelectedEvent} />
+      </div>
+      <div className="md:hidden">
+        <Sheet>
+          <SheetTrigger render={<Button variant="outline" className="w-full" />}>
+            Show trace
+          </SheetTrigger>
+          <SheetPopup side="right">
+            <SheetHeader>
+              <SheetTitle>Trace</SheetTitle>
+              <SheetDescription>Structured work log for this case.</SheetDescription>
+            </SheetHeader>
+            <SheetPanel>
+              <EventTimeline events={currentCase.trace} onSelectEvent={setSelectedEvent} />
+            </SheetPanel>
+          </SheetPopup>
+        </Sheet>
+      </div>
+      <RawEvidenceSheet event={selectedEvent} onClose={() => setSelectedEvent(null)} />
     </main>
   );
 }

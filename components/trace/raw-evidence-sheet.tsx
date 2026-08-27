@@ -1,42 +1,72 @@
+"use client";
+
 import React from "react";
+import { Button } from "@/components/ui/button";
+import {
+  Sheet,
+  SheetClose,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetPanel,
+  SheetPopup,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import type { TraceEvent } from "@/lib/storage/types.ts";
+import { stageLabel } from "./event-timeline.tsx";
 
 export type RawEvidenceSheetProps = {
   event: TraceEvent | null;
+  onClose?: () => void;
 };
 
-export function RawEvidenceSheet({ event }: RawEvidenceSheetProps): React.JSX.Element {
-  const isOpen = event !== null;
+export function RawEvidenceSheet({ event, onClose }: RawEvidenceSheetProps): React.JSX.Element {
+  const open = event !== null;
   return (
-    <aside
+    <div
       data-component="raw-evidence-sheet"
-      data-open={isOpen ? "true" : "false"}
+      data-open={open ? "true" : "false"}
       data-event-id={event?.id ?? ""}
-      hidden={!isOpen}
-      style={{
-        marginTop: "var(--space-3)",
-        padding: "var(--space-3)",
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius-sm)",
-        background: "var(--surface-sunken)",
-      }}
     >
-      <h3 style={{ marginTop: 0 }}>Raw event payload</h3>
-      <pre
-        data-field="payload"
-        style={{
-          margin: 0,
-          padding: "var(--space-2)",
-          background: "var(--surface-raised)",
-          border: "1px solid var(--border)",
-          borderRadius: "var(--radius-sm)",
-          fontSize: "12px",
-          lineHeight: "16px",
-          overflow: "auto",
+      <Sheet
+        open={open}
+        onOpenChange={(next) => {
+          if (!next) onClose?.();
         }}
       >
-        {JSON.stringify(event?.payload ?? null, null, 2)}
-      </pre>
-    </aside>
+        <SheetPopup side="right">
+          <SheetHeader>
+            <SheetTitle>Raw event payload</SheetTitle>
+            <SheetDescription>
+              {event
+                ? `${stageLabel(event.stage)} · ${event.status} · run ${event.runId}`
+                : ""}
+            </SheetDescription>
+          </SheetHeader>
+          <SheetPanel className="grid gap-4">
+            <pre
+              data-field="payload"
+              className="m-0 overflow-auto rounded-lg border p-2 font-mono text-xs leading-4"
+              style={{ background: "var(--surface-sunken)" }}
+            >
+              {JSON.stringify(event?.payload ?? null, null, 2)}
+            </pre>
+            {event && event.evidenceRefs.length > 0 ? (
+              <div data-field="evidence-refs" className="grid gap-1">
+                <h4 className="m-0 text-sm font-medium">Evidence refs</h4>
+                {event.evidenceRefs.map((r) => (
+                  <code key={r} data-record-ref={r} className="font-mono text-xs">
+                    {r}
+                  </code>
+                ))}
+              </div>
+            ) : null}
+          </SheetPanel>
+          <SheetFooter>
+            <SheetClose render={<Button variant="outline" />}>Close</SheetClose>
+          </SheetFooter>
+        </SheetPopup>
+      </Sheet>
+    </div>
   );
 }
