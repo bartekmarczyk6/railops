@@ -1,6 +1,5 @@
 export type { PipelineStage, TraceEvent, TraceStatus } from "../storage/types.ts";
 
-import { randomUUID } from "node:crypto";
 import type { PipelineStage, TraceEvent, TraceStatus } from "../storage/types.ts";
 
 export type CreateEventInput = {
@@ -21,7 +20,7 @@ export type CreateEventInput = {
 
 export function createEvent(input: CreateEventInput): TraceEvent {
   return {
-    id: randomUUID(),
+    id: globalThis.crypto.randomUUID(),
     caseId: input.caseId,
     runId: input.runId,
     sequence: input.sequence,

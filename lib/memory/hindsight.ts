@@ -1,9 +1,5 @@
-import {
-  buildLearningContent,
-  learningMetadata,
-  learningTags,
-  type TombstoneStore,
-} from "./learning";
+import { buildLearningContent, learningMetadata, learningTags } from "./sanitize";
+import type { TombstoneStore } from "./learning";
 import {
   type CaseTopic,
   type LearningRecord,

@@ -43,29 +43,14 @@ import { createEvent, sameRunEvents } from "./events.ts";
 export const DEFAULT_DATA_DIR = ".railops/data";
 export const DEFAULT_KNOWLEDGE_INDEX = DEFAULT_INDEX_PATH;
 export const MAX_BAML_CALLS_PER_RUN = 6;
-export const MAX_REVISIONS = 1;
+
+export { MAX_REVISIONS, MaxRevisionsReached, ReviewError } from "./errors.ts";
 
 export class PipelineError extends Error {
   readonly code: string;
   constructor(code: string, message: string) {
     super(message);
     this.name = "PipelineError";
-    this.code = code;
-  }
-}
-
-export class MaxRevisionsReached extends Error {
-  constructor() {
-    super("Maximum revisions reached");
-    this.name = "MaxRevisionsReached";
-  }
-}
-
-export class ReviewError extends Error {
-  readonly code: string;
-  constructor(code: string, message: string) {
-    super(message);
-    this.name = "ReviewError";
     this.code = code;
   }
 }

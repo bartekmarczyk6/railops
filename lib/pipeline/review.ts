@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 import { readState, updateState } from "../storage/store.ts";
 import type {
   AppState,
@@ -9,18 +7,18 @@ import type {
   TraceEvent,
 } from "../storage/types.ts";
 import {
-  recallReviewerContext,
   retainReviewerLearning,
   undoReviewerLearning,
+  type HindsightLike,
 } from "../memory/hindsight.ts";
 import type { CaseTopic, LearningRecord } from "../memory/types.ts";
-import { sanitizeLearningText } from "../memory/learning.ts";
+import { sanitizeLearningText } from "../memory/sanitize.ts";
 import type { DecisionDraft, DecisionOutcome } from "../llm/types.ts";
 
 import { createEvent } from "./events.ts";
-import { ReviewError, MaxRevisionsReached, MAX_REVISIONS } from "./run-case.ts";
+import { ReviewError, MaxRevisionsReached, MAX_REVISIONS } from "./errors.ts";
 
-export { MaxRevisionsReached, ReviewError } from "./run-case.ts";
+export { MaxRevisionsReached, ReviewError } from "./errors.ts";
 
 export const DEFAULT_DATA_DIR = ".railops/data";
 
@@ -34,7 +32,7 @@ export type ReviewInput = {
 
 export type ReviewOptions = {
   dataDir?: string;
-  memoryClient?: Parameters<typeof recallReviewerContext>[0]["client"];
+  memoryClient?: HindsightLike | null;
   reviewer?: string;
   now?: () => Date;
 };
@@ -136,15 +134,25 @@ function outcomeToLearning(
   return outcome;
 }
 
-export async function reviewCase(
+export type ApplyReviewOptions = {
+  memoryClient?: HindsightLike | null;
+  reviewer?: string;
+  now?: () => Date;
+};
+
+export type ApplyReviewResult = {
+  state: AppState;
+  updatedCase: StoredCase;
+};
+
+export async function applyReview(
+  state: AppState,
   input: ReviewInput,
-  options: ReviewOptions = {},
-): Promise<StoredCase> {
-  const dataDir = options.dataDir ?? DEFAULT_DATA_DIR;
+  options: ApplyReviewOptions = {},
+): Promise<ApplyReviewResult> {
   const reviewer = options.reviewer ?? "demo-reviewer";
   const now = options.now ?? (() => new Date());
 
-  const state = await readState({ dataDir });
   const existing = state.cases.find((c) => c.caseId === input.caseId);
   if (!existing) {
     throw new ReviewError("case_not_found", `case ${input.caseId} not found`);
@@ -161,14 +169,11 @@ export async function reviewCase(
       `case ${input.caseId} version is ${existing.version}, expected ${input.expectedVersion}`,
     );
   }
-
-  if (input.action === "approve" || input.action === "reject" || input.action === "edit") {
-    if (input.action === "reject" && (!input.feedback || input.feedback.trim().length === 0)) {
-      throw new ReviewError("feedback_required", "rejection requires non-empty feedback");
-    }
-    if (input.action === "edit" && !input.editedDraft) {
-      throw new ReviewError("edited_draft_required", "edit action requires editedDraft");
-    }
+  if (input.action === "reject" && (!input.feedback || input.feedback.trim().length === 0)) {
+    throw new ReviewError("feedback_required", "rejection requires non-empty feedback");
+  }
+  if (input.action === "edit" && !input.editedDraft) {
+    throw new ReviewError("edited_draft_required", "edit action requires editedDraft");
   }
 
   const editCount = countEdits(existing.reviewHistory);
@@ -205,7 +210,7 @@ export async function reviewCase(
     nextState = "revising";
   }
 
-  const learningId = `learning-${randomUUID()}`;
+  const learningId = `learning-${globalThis.crypto.randomUUID()}`;
   const learning = makeLearningRecord({
     caseId: existing.caseId,
     id: learningId,
@@ -251,8 +256,9 @@ export async function reviewCase(
     },
   });
 
-  await updateState((s: AppState) => {
-    const cases = s.cases.map((c) =>
+  const afterReview: AppState = {
+    ...state,
+    cases: state.cases.map((c) =>
       c.caseId === existing.caseId
         ? {
             ...c,
@@ -263,26 +269,17 @@ export async function reviewCase(
             updatedAt: ts,
           }
         : c,
-    );
-    const events = [
-      ...s.events.filter(
-        (e) => !(e.caseId === existing.caseId && e.id === reviewTrace.id),
-      ),
-      reviewTrace,
-    ];
-    return {
-      ...s,
-      cases,
-      events,
-      learning: [...s.learning, learning],
-    };
-  }, { dataDir });
+    ),
+    events: [...state.events, reviewTrace],
+    learning: [...state.learning, learning],
+  };
 
   const retained = await retainReviewerLearning({
     record: learning,
     client: options.memoryClient,
   });
-  const learningSaved = retained.memoryId !== null;
+  const memoryId = retained.memoryId;
+  const learningSaved = memoryId !== null;
   const learningTrace: TraceEvent = createEvent({
     caseId: existing.caseId,
     runId,
@@ -299,45 +296,87 @@ export async function reviewCase(
     error: learningSaved ? null : "hindsight_unavailable",
   });
 
-  await updateState((s: AppState) => {
-    const cases = s.cases.map((c) =>
+  let finalLearning = afterReview.learning;
+  if (memoryId !== null) {
+    finalLearning = afterReview.learning.map((r) =>
+      r.id === learningId ? { ...r, id: memoryId } : r,
+    );
+  }
+
+  const finalState: AppState = {
+    ...afterReview,
+    cases: afterReview.cases.map((c) =>
       c.caseId === existing.caseId
         ? {
             ...c,
-            learningRef: learningSaved ? retained.memoryId : c.learningRef,
+            learningRef: memoryId !== null ? memoryId : c.learningRef,
             trace: [...c.trace, learningTrace],
           }
         : c,
-    );
-    const learningRecords = learningSaved
-      ? s.learning.map((r) =>
-          r.id === learningId ? { ...r, id: retained.memoryId as string } : r,
-        )
-      : s.learning;
-    const events = [
-      ...s.events.filter(
-        (e) => !(e.caseId === existing.caseId && e.id === learningTrace.id),
-      ),
-      learningTrace,
-    ];
-    return { ...s, cases, learning: learningRecords, events };
-  }, { dataDir });
+    ),
+    learning: finalLearning,
+    events: [...afterReview.events, learningTrace],
+  };
 
-  const refreshed = (await readState({ dataDir })).cases.find(
-    (c) => c.caseId === existing.caseId,
-  );
-  if (!refreshed) {
+  const updatedCase = finalState.cases.find((c) => c.caseId === existing.caseId);
+  if (!updatedCase) {
     throw new ReviewError("case_not_found", "case disappeared during review");
   }
-  return refreshed;
+  return { state: finalState, updatedCase };
+}
+
+export async function reviewCase(
+  input: ReviewInput,
+  options: ReviewOptions = {},
+): Promise<StoredCase> {
+  const dataDir = options.dataDir ?? DEFAULT_DATA_DIR;
+  const state = await readState({ dataDir });
+  const { state: next, updatedCase } = await applyReview(state, input, options);
+  await updateState(() => next, { dataDir });
+  return updatedCase;
 }
 
 export type RevertLearningOptions = {
   dataDir?: string;
-  memoryClient?: Parameters<typeof recallReviewerContext>[0]["client"];
+  memoryClient?: HindsightLike | null;
 };
 
 export type RevertLearningResult = { undone: boolean; error: string | null };
+
+export type ApplyRevertResult = {
+  state: AppState;
+  undone: boolean;
+  error: string | null;
+};
+
+export type ApplyRevertLearningOptions = {
+  memoryClient?: HindsightLike | null;
+};
+
+export async function applyRevertLearning(
+  state: AppState,
+  learningId: string,
+  options: ApplyRevertLearningOptions = {},
+): Promise<ApplyRevertResult> {
+  const record = state.learning.find((r) => r.id === learningId);
+  const owner = state.cases.find((c) => c.learningRef === learningId);
+  if (!record && !owner) {
+    return { state, undone: false, error: "learning_not_found" };
+  }
+  const next: AppState = {
+    ...state,
+    learning: state.learning.filter((r) => r.id !== learningId),
+    cases: state.cases.map((c) =>
+      c.learningRef === learningId
+        ? { ...c, learningRef: null, updatedAt: new Date().toISOString() }
+        : c,
+    ),
+  };
+  if (owner) {
+    await undoReviewerLearning({ memoryId: learningId, client: options.memoryClient });
+  }
+  return { state: next, undone: true, error: null };
+}
 
 export async function revertLearning(
   learningId: string,
@@ -345,22 +384,9 @@ export async function revertLearning(
 ): Promise<RevertLearningResult> {
   const dataDir = options.dataDir ?? DEFAULT_DATA_DIR;
   const state = await readState({ dataDir });
-  const record = state.learning.find((r) => r.id === learningId);
-  const owner = state.cases.find((c) => c.learningRef === learningId);
-  if (!record && !owner) {
-    return { undone: false, error: "learning_not_found" };
+  const { state: next, undone, error } = await applyRevertLearning(state, learningId, options);
+  if (undone) {
+    await updateState(() => next, { dataDir });
   }
-  await updateState((s: AppState) => ({
-    ...s,
-    learning: s.learning.filter((r) => r.id !== learningId),
-    cases: s.cases.map((c) =>
-      c.learningRef === learningId
-        ? { ...c, learningRef: null, updatedAt: new Date().toISOString() }
-        : c,
-    ),
-  }), { dataDir });
-  if (owner) {
-    await undoReviewerLearning({ memoryId: learningId, client: options.memoryClient });
-  }
-  return { undone: true, error: null };
+  return { undone, error };
 }
