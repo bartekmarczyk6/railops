@@ -1,6 +1,5 @@
 import React from "react";
 import { readState } from "@/lib/storage/store.ts";
-import { getDataDir } from "@/app/api/_shared/data-dir.ts";
 import { loadKnowledgeIndex } from "@/lib/knowledge/indexer.ts";
 import { recallReviewerContext } from "@/lib/memory/hindsight.ts";
 import type {
@@ -15,7 +14,7 @@ import type { KnowledgeExcerpt, KnowledgePassage } from "@/lib/knowledge/types.t
 import { CaseReviewPage } from "@/components/review/case-review-page.tsx";
 import { OUTCOME_LABEL } from "@/components/review/formatters.ts";
 import type { ReviewInput } from "@/lib/pipeline/review.ts";
-import { reviewCase, revertLearning } from "@/lib/pipeline/review.ts";
+import { DEFAULT_DATA_DIR, reviewCase, revertLearning } from "@/lib/pipeline/review.ts";
 import type { KnowledgeExcerptView } from "@/components/review/knowledge-panel.tsx";
 
 type Params = { id: string };
@@ -198,7 +197,7 @@ export default async function CasePage({
   params: Promise<Params>;
 }): Promise<React.JSX.Element> {
   const { id } = await params;
-  const dataDir = getDataDir();
+  const dataDir = DEFAULT_DATA_DIR;
   const state = await readState({ dataDir });
   const stored = state.cases.find((c) => c.caseId === id);
   if (!stored) {
