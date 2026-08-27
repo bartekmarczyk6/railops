@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
+import bundledIndex from "../../knowledge/index.json";
+
 import type {
   CaseTopic,
   KnowledgeExcerpt,
@@ -9,7 +11,7 @@ import type {
 } from "./types.ts";
 
 const DEFAULT_LIMIT = 5;
-const DEFAULT_INDEX_PATH = "./knowledge/index.json";
+export const DEFAULT_INDEX_PATH = "./knowledge/index.json";
 
 export type SearchQuery = {
   topic: CaseTopic;
@@ -70,6 +72,13 @@ export function searchIndex(
 }
 
 function loadIndexSync(indexPath: string): KnowledgeIndex {
+  if (indexPath === DEFAULT_INDEX_PATH) {
+    const parsed = bundledIndex as unknown as KnowledgeIndex;
+    if (!Array.isArray(parsed.passages)) {
+      throw new Error("bundled knowledge index is missing passages array");
+    }
+    return parsed;
+  }
   const resolved = resolve(process.cwd(), indexPath);
   const raw = readFileSync(resolved, "utf8");
   const parsed = JSON.parse(raw) as KnowledgeIndex;

@@ -10,7 +10,10 @@ import {
   buildKnowledgeIndex,
   loadKnowledgeIndex,
 } from "../lib/knowledge/indexer.ts";
-import { searchKnowledge } from "../lib/knowledge/search.ts";
+import {
+  resetKnowledgeIndexCache,
+  searchKnowledge,
+} from "../lib/knowledge/search.ts";
 import type { SearchQuery } from "../lib/knowledge/search.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -351,5 +354,20 @@ test("committed knowledge index loads and exposes passages for each topic", asyn
       (byTopic[topic] ?? 0) > 0,
       `committed index is missing passages for topic ${topic}`,
     );
+  }
+});
+
+test("searchKnowledge with default path uses the bundled index", () => {
+  resetKnowledgeIndexCache();
+  const results = searchKnowledge({
+    topic: "delay_refund",
+    terms: ["delay", "refund"],
+  });
+  assert.ok(
+    results.length > 0,
+    "bundled index should return excerpts for delay_refund",
+  );
+  for (const excerpt of results) {
+    assert.ok(excerpt.topics.includes("delay_refund"));
   }
 });

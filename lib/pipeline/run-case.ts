@@ -11,7 +11,7 @@ import type {
 } from "../storage/types.ts";
 import { evaluateCase } from "../rules/evaluate.ts";
 import type { ExtractedClaims as RulesExtractedClaims, RuleEvaluation } from "../rules/types.ts";
-import { searchKnowledge } from "../knowledge/search.ts";
+import { DEFAULT_INDEX_PATH, searchKnowledge } from "../knowledge/search.ts";
 import type { KnowledgeExcerpt } from "../knowledge/types.ts";
 import { recallReviewerContext } from "../memory/hindsight.ts";
 import type { MemoryContext } from "../memory/types.ts";
@@ -41,7 +41,7 @@ import { awaitCaseEmail } from "./email-prep.ts";
 import { createEvent, sameRunEvents } from "./events.ts";
 
 export const DEFAULT_DATA_DIR = ".railops/data";
-export const DEFAULT_KNOWLEDGE_INDEX = "./knowledge/index.json";
+export const DEFAULT_KNOWLEDGE_INDEX = DEFAULT_INDEX_PATH;
 export const MAX_BAML_CALLS_PER_RUN = 6;
 export const MAX_REVISIONS = 1;
 
