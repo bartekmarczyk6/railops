@@ -1,20 +1,38 @@
 import { NextResponse } from "next/server";
 
-import { readState } from "@/lib/storage/store.ts";
 import { getLlmClient } from "@/lib/pipeline/llm-resolver.ts";
 import { runCase, resumeCase, PipelineError } from "@/lib/pipeline/run-case.ts";
 import type { StreamFrame } from "@/lib/pipeline/run-case.ts";
-import type { TraceEvent } from "@/lib/storage/types.ts";
-import { getDataDir } from "@/app/api/_shared/data-dir.ts";
+import { readState, seedState, dropState } from "@/lib/storage/store.ts";
+import {
+  CURRENT_SCHEMA_VERSION,
+  type AppState,
+  type StoredCase,
+  type TraceEvent,
+} from "@/lib/storage/types.ts";
+
+export const runtime = "nodejs";
+export const maxDuration = 60;
 
 type Params = { id: string };
 
-function sseFrame(payload: TraceEvent | StreamFrame): Uint8Array {
+type DoneFrame = { type: "done"; stored: StoredCase };
+
+function sseFrame(payload: TraceEvent | StreamFrame | DoneFrame): Uint8Array {
   return new TextEncoder().encode(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
-function notFound(): Response {
-  return NextResponse.json({ error: "case_not_found" }, { status: 404 });
+function parseStored(
+  raw: unknown,
+): StoredCase | null {
+  if (raw === null || raw === undefined || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+  const candidate = raw as Partial<StoredCase>;
+  if (typeof candidate.caseId !== "string" || candidate.caseId.length === 0) {
+    return null;
+  }
+  return raw as StoredCase;
 }
 
 function parseAnswers(
@@ -35,33 +53,50 @@ export async function POST(
   context: { params: Promise<Params> },
 ): Promise<Response> {
   const { id } = await context.params;
-  const dataDir = getDataDir();
-  const state = await readState({ dataDir });
-  if (!state.cases.find((c) => c.caseId === id)) {
-    return notFound();
-  }
 
   let parsed: unknown;
   try {
     const text = await request.text();
     parsed = text.trim().length > 0 ? JSON.parse(text) : undefined;
   } catch {
-    return NextResponse.json({ error: "invalid_input" }, { status: 400 });
+    return NextResponse.json({ error: "invalid_body" }, { status: 400 });
   }
+  if (parsed === undefined || parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return NextResponse.json({ error: "invalid_body" }, { status: 400 });
+  }
+  const body = parsed as Record<string, unknown>;
+
+  const stored = parseStored(body.stored);
+  if (!stored) {
+    return NextResponse.json(
+      { error: "invalid_input", message: "stored case is required" },
+      { status: 400 },
+    );
+  }
+  if (stored.caseId !== id) {
+    return NextResponse.json(
+      { error: "invalid_input", message: "stored.caseId does not match route id" },
+      { status: 400 },
+    );
+  }
+
   let answers: Record<string, string> | null = null;
-  if (parsed !== undefined) {
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+  if ("answers" in body) {
+    const result = parseAnswers(body.answers);
+    if (!result.ok) {
       return NextResponse.json({ error: "invalid_input" }, { status: 400 });
     }
-    const body = parsed as Record<string, unknown>;
-    if ("answers" in body) {
-      const result = parseAnswers(body.answers);
-      if (!result.ok) {
-        return NextResponse.json({ error: "invalid_input" }, { status: 400 });
-      }
-      answers = result.answers;
-    }
+    answers = result.answers;
   }
+
+  const state: AppState = {
+    schemaVersion: CURRENT_SCHEMA_VERSION,
+    cases: [stored],
+    events: [],
+    learning: [],
+  };
+  const dataDir = `request:${id}:${globalThis.crypto.randomUUID()}`;
+  seedState(dataDir, state);
 
   const signal = request.signal;
   const llm = getLlmClient();
@@ -91,6 +126,7 @@ export async function POST(
       };
       if (signal) {
         if (signal.aborted) {
+          dropState(dataDir);
           close();
           return;
         }
@@ -118,6 +154,9 @@ export async function POST(
           }
           enqueue(sseFrame(event));
         }
+        const finalState = await readState({ dataDir });
+        const updated = finalState.cases.find((c) => c.caseId === id) ?? stored;
+        enqueue(sseFrame({ type: "done", stored: updated }));
         close();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -141,6 +180,7 @@ export async function POST(
         close();
       } finally {
         if (signal) signal.removeEventListener("abort", onAbort);
+        dropState(dataDir);
       }
     },
   });

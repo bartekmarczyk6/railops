@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { resolve } from "node:path";
 
 import { readState, updateState } from "../storage/store.ts";
 import type {
@@ -854,7 +853,7 @@ export async function* runCase(
   caseId: string,
   options: RunCaseOptions = {},
 ): AsyncGenerator<TraceEvent> {
-  const dataDir = resolve(options.dataDir ?? DEFAULT_DATA_DIR);
+  const dataDir = options.dataDir ?? DEFAULT_DATA_DIR;
   const llm: LlmClient = options.llm ?? defaultLlm;
   const runId = ensureRunId(options.runId);
 
@@ -989,7 +988,7 @@ export async function* resumeCase(
   answers: Record<string, string>,
   options: RunCaseOptions = {},
 ): AsyncGenerator<TraceEvent> {
-  const dataDir = resolve(options.dataDir ?? DEFAULT_DATA_DIR);
+  const dataDir = options.dataDir ?? DEFAULT_DATA_DIR;
   const llm: LlmClient = options.llm ?? defaultLlm;
   const runId = ensureRunId(options.runId);
 
