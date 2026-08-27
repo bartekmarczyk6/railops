@@ -26,45 +26,37 @@ function fields(base: DecisionDraft, edited: DecisionDraft): Field[] {
   return out;
 }
 
+export function draftDiffFields(base: DecisionDraft, edited: DecisionDraft): Field[] {
+  return fields(base, edited);
+}
+
 export function DraftDiff({ base, edited }: DraftDiffProps): React.JSX.Element {
   const diffs = fields(base, edited);
   if (diffs.length === 0) {
     return (
       <div data-component="draft-diff" data-empty="true">
-        <p style={{ margin: 0 }}>No differences yet.</p>
+        <p className="m-0">No differences yet.</p>
       </div>
     );
   }
   return (
     <div data-component="draft-diff" data-empty="false">
-      <ul style={{ margin: 0, paddingLeft: "var(--space-4)", display: "grid", gap: "var(--space-2)" }}>
+      <ul className="m-0 grid list-none gap-2 p-0">
         {diffs.map((d) => (
-          <li key={d.label} data-field="diff-row" data-label={d.label}>
+          <li key={d.label} data-field="diff-row" data-label={d.label} className="grid gap-1">
             <strong>{d.label}</strong>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--space-2)" }}>
+            <div className="grid gap-2 [grid-template-columns:1fr_1fr]">
               <pre
                 data-field="before"
-                style={{
-                  margin: 0,
-                  padding: "var(--space-2)",
-                  background: "var(--surface-sunken)",
-                  border: "1px solid var(--border)",
-                  borderRadius: "var(--radius-sm)",
-                  whiteSpace: "pre-wrap",
-                }}
+                className="m-0 whitespace-pre-wrap rounded-md border p-2 text-sm"
+                style={{ background: "var(--surface-sunken)" }}
               >
                 {d.before}
               </pre>
               <pre
                 data-field="after"
-                style={{
-                  margin: 0,
-                  padding: "var(--space-2)",
-                  background: "var(--surface-raised)",
-                  border: "1px solid var(--border)",
-                  borderRadius: "var(--radius-sm)",
-                  whiteSpace: "pre-wrap",
-                }}
+                className="m-0 whitespace-pre-wrap rounded-md border p-2 text-sm"
+                style={{ background: "var(--surface-raised)" }}
               >
                 {d.after}
               </pre>

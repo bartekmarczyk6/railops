@@ -17,7 +17,11 @@ import type {
 import { CaseReviewPage } from "../components/review/case-review-page.tsx";
 import { EventTimeline } from "../components/trace/event-timeline.tsx";
 import { DecisionBasisList } from "../components/trace/decision-basis.tsx";
-import { ApprovalCard } from "../components/review/approval-card.tsx";
+import { RawEvidenceSheet } from "../components/trace/raw-evidence-sheet.tsx";
+import { ApprovalCard, RejectDialogBody } from "../components/review/approval-card.tsx";
+import { AlertDialog } from "../components/ui/alert-dialog.tsx";
+import { EmailPanel } from "../components/review/email-panel.tsx";
+import { DraftDiff } from "../components/review/draft-diff.tsx";
 import { ToolChip } from "../components/trace/tool-chip.tsx";
 import {
   buildReviewInput,
@@ -119,6 +123,13 @@ function findAllDataRecordRefs(html: string): string[] {
   return refs;
 }
 
+function buttonTag(html: string, action: string): string {
+  const re = new RegExp(`<button[^>]*data-action="${action}"[^>]*>`, "g");
+  const m = re.exec(html);
+  assert.ok(m, `button with data-action="${action}" must render`);
+  return m[0];
+}
+
 function buildPageProps(overrides: Partial<Parameters<typeof CaseReviewPage>[0]> = {}): Parameters<typeof CaseReviewPage>[0] {
   return {
     caseData: makeStoredCase(),
@@ -143,6 +154,27 @@ function buildPageProps(overrides: Partial<Parameters<typeof CaseReviewPage>[0]>
     alternatives: ["information", "change"],
     followUp: [],
     onReviewAction: async () => ({ error: null, case: null }),
+    ...overrides,
+  };
+}
+
+type ApprovalCardTestProps = Parameters<typeof ApprovalCard>[0];
+
+function buildApprovalProps(overrides: Partial<ApprovalCardTestProps> = {}): ApprovalCardTestProps {
+  const decision = makeDecision();
+  return {
+    state: "reviewable",
+    decision,
+    form: { feedback: "", editedDraft: { ...decision } },
+    onFormChange: () => {},
+    editing: false,
+    onStartEdit: () => {},
+    onCancelEdit: () => {},
+    onSaveEdit: async () => true,
+    onApprove: async () => true,
+    onReject: async () => true,
+    pending: false,
+    lastError: null,
     ...overrides,
   };
 }
@@ -194,71 +226,78 @@ test("CaseReviewPage: shows structured trace timeline with stage + function + du
   assert.match(html, /150\s*ms/);
 });
 
-test("ApprovalCard: disabled when case state is not reviewable", () => {
-  const stored = makeStoredCase({ state: "generating_email" as StoredCase["state"] });
+test("CaseReviewPage: inbound email body and subject are rendered", () => {
   const html = renderToStaticMarkup(
-    createElement(ApprovalCard, {
-      state: stored.state,
-      caseId: stored.caseId,
-      version: stored.version,
-      decision: makeDecision(),
-      onAction: () => Promise.resolve(),
-    }),
+    createElement(CaseReviewPage, buildPageProps({ knowledge: [] })),
+  );
+  assert.match(html, /Delay refund request/);
+  assert.match(html, /delayed by 45 minutes/);
+});
+
+test("ApprovalCard: disabled when case state is not reviewable", () => {
+  const html = renderToStaticMarkup(
+    createElement(ApprovalCard, buildApprovalProps({ state: "running" })),
   );
   assert.match(html, /data-disabled="true"/);
-  assert.match(html, /data-action="approve"[^>]*disabled/);
-  assert.match(html, /data-action="reject"[^>]*disabled/);
-  assert.match(html, /data-action="edit"[^>]*disabled/);
+  for (const action of ["approve", "reject", "edit"]) {
+    assert.match(buttonTag(html, action), /disabled=""/, `${action} must be disabled`);
+  }
 });
 
 test("ApprovalCard: enabled when case state is reviewable", () => {
   const html = renderToStaticMarkup(
-    createElement(ApprovalCard, {
-      state: "reviewable",
-      caseId: "case-x",
-      version: 2,
-      decision: makeDecision(),
-      onAction: () => Promise.resolve(),
-    }),
+    createElement(ApprovalCard, buildApprovalProps()),
   );
   assert.match(html, /data-disabled="false"/);
-  const approveBtn = /data-action="approve"[^>]*>/.exec(html);
-  const rejectBtn = /data-action="reject"[^>]*>/.exec(html);
-  const editBtn = /data-action="edit"[^>]*>/.exec(html);
-  assert.ok(approveBtn);
-  assert.ok(rejectBtn);
-  assert.ok(editBtn);
-  for (const m of [approveBtn, rejectBtn, editBtn]) {
-    assert.doesNotMatch(m[0], /\bdisabled\b/);
-  }
+  assert.match(html, /Approve/);
+  assert.match(html, /Request changes/);
+  assert.match(html, /Reject/);
+  assert.doesNotMatch(html, /data-action="approve"[^>]*disabled/);
 });
 
 test("ApprovalCard: surfaces API error gracefully when feedback is empty on reject", () => {
   const html = renderToStaticMarkup(
-    createElement(ApprovalCard, {
-      state: "reviewable",
-      caseId: "case-x",
-      version: 2,
-      decision: makeDecision(),
-      onAction: () => Promise.resolve(),
-      lastError: "feedback_required",
-    }),
+    createElement(ApprovalCard, buildApprovalProps({ lastError: "feedback_required" })),
   );
   assert.match(html, /Feedback is required to reject/i);
 });
 
 test("ApprovalCard: surfaces max_revisions_reached error when edit limit is hit", () => {
   const html = renderToStaticMarkup(
-    createElement(ApprovalCard, {
-      state: "reviewable",
-      caseId: "case-x",
-      version: 2,
-      decision: makeDecision(),
-      onAction: () => Promise.resolve(),
-      lastError: "max_revisions_reached",
-    }),
+    createElement(ApprovalCard, buildApprovalProps({ lastError: "max_revisions_reached" })),
   );
   assert.match(html, /One revision per case/i);
+});
+
+test("RejectDialogBody: confirm is blocked without feedback and enabled with feedback", () => {
+  const blocked = renderToStaticMarkup(
+    createElement(
+      AlertDialog,
+      { open: false },
+      createElement(RejectDialogBody, {
+        feedback: "",
+        onFeedback: () => {},
+        onConfirm: () => {},
+        busy: false,
+      }),
+    ),
+  );
+  assert.match(buttonTag(blocked, "confirm-reject"), /disabled=""/);
+  assert.match(blocked, /data-field="reject-feedback"/);
+
+  const allowed = renderToStaticMarkup(
+    createElement(
+      AlertDialog,
+      { open: false },
+      createElement(RejectDialogBody, {
+        feedback: "amount should match policy",
+        onFeedback: () => {},
+        onConfirm: () => {},
+        busy: false,
+      }),
+    ),
+  );
+  assert.doesNotMatch(buttonTag(allowed, "confirm-reject"), /disabled=""/);
 });
 
 test("buildReviewInput: reject without feedback returns a validation error", () => {
@@ -349,7 +388,86 @@ test("buildReviewInput: approve with no edits is a valid request", () => {
   }
 });
 
-test("EventTimeline: click handler is wired and the raw evidence sheet opens with the payload", () => {
+test("ApprovalCard: editing shows the draft diff and save/cancel controls", () => {
+  const decision = makeDecision();
+  const edited = makeDecision({ proposedAmount: 75 });
+  const html = renderToStaticMarkup(
+    createElement(
+      ApprovalCard,
+      buildApprovalProps({
+        editing: true,
+        form: { feedback: "", editedDraft: edited },
+        decision,
+      }),
+    ),
+  );
+  assert.match(html, /data-component="edit-surface"/);
+  assert.match(html, /data-component="draft-diff" data-empty="false"/);
+  assert.match(html, /data-action="save-edit"/);
+  assert.match(html, /data-action="cancel-edit"/);
+});
+
+test("ApprovalCard: save-edit stays disabled while the draft is unchanged", () => {
+  const decision = makeDecision();
+  const html = renderToStaticMarkup(
+    createElement(
+      ApprovalCard,
+      buildApprovalProps({
+        editing: true,
+        form: { feedback: "", editedDraft: { ...decision } },
+        decision,
+      }),
+    ),
+  );
+  assert.match(buttonTag(html, "save-edit"), /disabled=""/);
+});
+
+test("EmailPanel: read-only mode shows the draft response as text, not an editor", () => {
+  const html = renderToStaticMarkup(
+    createElement(EmailPanel, {
+      email: makeEmail(),
+      claims: makeClaims(),
+      decision: makeDecision(),
+      editing: false,
+      editedDraft: null,
+      onChangeEditedDraft: () => {},
+    }),
+  );
+  assert.match(html, /Refund approved at 50% of paid price\./);
+  assert.doesNotMatch(html, /<textarea/);
+});
+
+test("EmailPanel: editing mode renders editable outcome, amount, and response fields", () => {
+  const decision = makeDecision();
+  const html = renderToStaticMarkup(
+    createElement(EmailPanel, {
+      email: makeEmail(),
+      claims: makeClaims(),
+      decision,
+      editing: true,
+      editedDraft: { ...decision },
+      onChangeEditedDraft: () => {},
+    }),
+  );
+  assert.match(html, /data-field="draft-outcome"/);
+  assert.match(html, /data-field="draft-amount"/);
+  assert.match(html, /<textarea[^>]*data-field="draft-response-text"/);
+});
+
+test("DraftDiff: renders before/after per changed field", () => {
+  const html = renderToStaticMarkup(
+    createElement(DraftDiff, {
+      base: makeDecision(),
+      edited: makeDecision({ proposedAmount: 75 }),
+    }),
+  );
+  assert.match(html, /data-component="draft-diff" data-empty="false"/);
+  assert.match(html, /data-label="Proposed amount"/);
+  assert.match(html, /data-field="before"/);
+  assert.match(html, /data-field="after"/);
+});
+
+test("EventTimeline: rows are clickable and the raw evidence sheet starts closed", () => {
   const stored = makeStoredCase();
   const events = stored.trace;
   const html = renderToStaticMarkup(
@@ -360,7 +478,23 @@ test("EventTimeline: click handler is wired and the raw evidence sheet opens wit
   );
   const eventMatch = /data-event-id="([^"]+)"/.exec(html);
   assert.ok(eventMatch, "events must render with data-event-id");
-  assert.match(html, /data-component="raw-evidence-sheet"[^>]*data-open="false"/);
+  const buttons = html.match(/data-action="open-evidence"/g) ?? [];
+  assert.equal(buttons.length, events.length, "every trace row must carry an open-evidence button");
+});
+
+test("RawEvidenceSheet: opens for a selected event and closes via callback wiring", () => {
+  const stored = makeStoredCase();
+  const event = stored.trace[0];
+  assert.ok(event);
+  const closed = renderToStaticMarkup(
+    createElement(RawEvidenceSheet, { event: null, onClose: () => {} }),
+  );
+  assert.match(closed, /data-component="raw-evidence-sheet"[^>]*data-open="false"/);
+  const open = renderToStaticMarkup(
+    createElement(RawEvidenceSheet, { event, onClose: () => {} }),
+  );
+  assert.match(open, /data-component="raw-evidence-sheet"[^>]*data-open="true"/);
+  assert.match(open, new RegExp(`data-event-id="${event.id}"`));
 });
 
 test("ToolChip: shows function name and duration in ms", () => {

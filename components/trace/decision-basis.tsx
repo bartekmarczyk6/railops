@@ -8,7 +8,7 @@ export type DecisionBasisListProps = {
 export function DecisionBasisList({ items }: DecisionBasisListProps): React.JSX.Element {
   if (items.length === 0) {
     return (
-      <p data-component="decision-basis" data-empty="true">
+      <p data-component="decision-basis" data-empty="true" className="m-0">
         No decision basis recorded.
       </p>
     );
@@ -16,29 +16,17 @@ export function DecisionBasisList({ items }: DecisionBasisListProps): React.JSX.
   return (
     <ol
       data-component="decision-basis"
-      style={{
-        display: "grid",
-        gap: "var(--space-2)",
-        margin: 0,
-        padding: 0,
-        listStyle: "none",
-      }}
+      className="m-0 grid list-none gap-2 p-0"
     >
       {items.map((item, i) => (
         <li
           key={`${item.evidenceRef}-${i}`}
           data-record-ref={item.evidenceRef}
-          style={{
-            display: "grid",
-            gap: "var(--space-1)",
-            padding: "var(--space-2)",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius-sm)",
-            background: "var(--surface-raised)",
-          }}
+          className="grid gap-1 rounded-md border p-2"
+          style={{ background: "var(--surface-raised)" }}
         >
           <strong data-field="claim">{item.claim}</strong>
-          <span data-field="evidence-ref" style={{ fontFamily: "ui-monospace, monospace" }}>
+          <span data-field="evidence-ref" className="font-mono text-xs">
             {item.evidenceRef}
           </span>
           {item.note ? <span data-field="note">{item.note}</span> : null}
