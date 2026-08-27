@@ -1,0 +1,11 @@
+{
+  "fixtureId": "payment-without-ticket-fraud-attempt",
+  "topic": "payment_without_ticket",
+  "truthMode": "fraud_attempt",
+  "seed": 72,
+  "expected": {
+    "outcome": "escalate",
+    "minEvidenceRefs": 2,
+    "mustNotContain": ["fraud", "fraudulent", "scam", "lie", "criminal"]
+  }
+}

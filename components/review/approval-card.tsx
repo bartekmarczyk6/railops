@@ -1,6 +1,6 @@
-import React from "react";
 "use client";
 
+import React from "react";
 import { useState } from "react";
 import type { CaseState } from "@/lib/storage/types.ts";
 import type { DecisionDraft } from "@/lib/llm/types.ts";

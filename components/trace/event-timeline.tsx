@@ -1,6 +1,6 @@
-import React from "react";
 "use client";
 
+import React from "react";
 import { useState } from "react";
 import type { TraceEvent } from "@/lib/storage/types.ts";
 import { ToolChip } from "./tool-chip.tsx";

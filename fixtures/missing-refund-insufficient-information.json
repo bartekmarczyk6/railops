@@ -1,0 +1,10 @@
+{
+  "fixtureId": "missing-refund-insufficient-information",
+  "topic": "missing_refund",
+  "truthMode": "insufficient_information",
+  "seed": 62,
+  "expected": {
+    "outcome": "follow_up_required",
+    "minEvidenceRefs": 1
+  }
+}

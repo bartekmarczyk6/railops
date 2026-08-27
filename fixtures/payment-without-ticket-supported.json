@@ -1,0 +1,10 @@
+{
+  "fixtureId": "payment-without-ticket-supported",
+  "topic": "payment_without_ticket",
+  "truthMode": "supported_by_records",
+  "seed": 71,
+  "expected": {
+    "outcome": "follow_up_required",
+    "minEvidenceRefs": 1
+  }
+}

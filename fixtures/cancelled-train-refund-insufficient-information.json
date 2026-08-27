@@ -1,0 +1,10 @@
+{
+  "fixtureId": "cancelled-train-refund-insufficient-information",
+  "topic": "cancelled_train_refund",
+  "truthMode": "insufficient_information",
+  "seed": 22,
+  "expected": {
+    "outcome": "follow_up_required",
+    "minEvidenceRefs": 1
+  }
+}

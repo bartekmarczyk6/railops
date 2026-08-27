@@ -20,7 +20,6 @@ const SECRET_PATTERNS = [
   /sk-[A-Za-z0-9]{6,}/,
   /PLK_API_KEY/,
   /GROQ_API_KEY/,
-  /OPENROUTER_API_KEY/,
   /HINDSIGHT_API_KEY/,
   /HINDSIGHT_API_URL/,
 ];

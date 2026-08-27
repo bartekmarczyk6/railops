@@ -1,0 +1,10 @@
+{
+  "fixtureId": "validation-discount-penalty-supported",
+  "topic": "validation_discount_penalty",
+  "truthMode": "supported_by_records",
+  "seed": 81,
+  "expected": {
+    "outcome": "follow_up_required",
+    "minEvidenceRefs": 2
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "fixtureId": "passenger-name-change-fraud-attempt",
+  "topic": "passenger_name_change",
+  "truthMode": "fraud_attempt",
+  "seed": 52,
+  "expected": {
+    "outcome": "escalate",
+    "minEvidenceRefs": 2,
+    "mustNotContain": ["fraud", "fraudulent", "scam", "lie", "criminal"]
+  }
+}

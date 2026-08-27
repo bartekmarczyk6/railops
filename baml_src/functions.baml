@@ -7,7 +7,7 @@ function GenerateCustomerEmail(
   knowledgeJson: string,
   memoryJson: string
 ) -> EmailDraft {
-  client MockClient
+  client GroqClient
   prompt #"
     {{ TONE_PROFESSIONAL() }}
     {{ EVIDENCE_ONLY() }}
@@ -49,7 +49,7 @@ function ExtractCaseClaims(
   truthMode: string,
   messageText: string
 ) -> ExtractedClaims {
-  client MockClient
+  client GroqClient
   prompt #"
     {{ EVIDENCE_ONLY() }}
     {{ NEVER_INVENT() }}
@@ -82,7 +82,7 @@ function DraftDecision(
   knowledgeJson: string,
   memoryJson: string
 ) -> DecisionDraft {
-  client MockClient
+  client GroqClient
   prompt #"
     {{ EVIDENCE_ONLY() }}
     {{ NEVER_INVENT() }}
@@ -122,7 +122,7 @@ function CritiqueDecision(
   rulesJson: string,
   draftJson: string
 ) -> CritiqueReport {
-  client MockClient
+  client GroqClient
   prompt #"
     {{ EVIDENCE_ONLY() }}
     {{ NEVER_INVENT() }}
