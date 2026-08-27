@@ -24,7 +24,7 @@ async function resolveLlm(opts: EmailPrepOptions): Promise<LlmClient> {
   return getLlmClient();
 }
 
-function buildEmailInput(pkg: DemoCasePackage): GenerateEmailInput {
+export function buildEmailInput(pkg: DemoCasePackage): GenerateEmailInput {
   return {
     casePackageJson: JSON.stringify(pkg),
     topic: pkg.topic,
