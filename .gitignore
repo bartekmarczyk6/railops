@@ -15,3 +15,12 @@ baml_client/
 
 # railops local state (includes Hindsight tombstones under .railops/memory/)
 .railops/
+
+# local-only docs and agent tooling — never publish
+docs/
+CONTEXT.md
+DESIGN.md
+PRODUCT.md
+.agents/
+.claude/
+skills-lock.json
