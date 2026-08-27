@@ -36,6 +36,10 @@ export function isReviewed(state: CaseState): boolean {
   return REVIEWED_STATES.has(state);
 }
 
+export function hasReviewRecord(storedCase: StoredCase): boolean {
+  return storedCase.reviewHistory.length > 0;
+}
+
 function alignmentFor(action: ReviewAction): number {
   if (action === "approve") return 1;
   if (action === "reject") return 0;
@@ -66,7 +70,7 @@ export function computeDashboardData(cases: readonly StoredCase[]): DashboardDat
     byState[c.state] = (byState[c.state] ?? 0) + 1;
     byTopic[c.topic] = (byTopic[c.topic] ?? 0) + 1;
     byTruthMode[c.truthMode] = (byTruthMode[c.truthMode] ?? 0) + 1;
-    if (!isReviewed(c.state)) continue;
+    if (!hasReviewRecord(c)) continue;
     reviewed += 1;
     const last = c.reviewHistory[c.reviewHistory.length - 1];
     if (!last) continue;

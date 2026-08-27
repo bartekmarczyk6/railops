@@ -42,6 +42,7 @@ export type CaseReviewPageProps = {
   alternatives: string[];
   followUp: string[];
   onReviewAction: (input: ReviewInput) => Promise<{ error: string | null; case: StoredCase | null }>;
+  onUndoLearning?: (learningId: string) => void | Promise<void>;
 };
 
 export function CaseReviewPage(props: CaseReviewPageProps): React.JSX.Element {
@@ -59,6 +60,7 @@ export function CaseReviewPage(props: CaseReviewPageProps): React.JSX.Element {
     alternatives,
     followUp,
     onReviewAction,
+    onUndoLearning,
   } = props;
 
   const [editedDraft, setEditedDraft] = useState<DecisionDraft | null>(null);
@@ -120,11 +122,24 @@ export function CaseReviewPage(props: CaseReviewPageProps): React.JSX.Element {
       {editedDraft ? <DraftDiff base={decision} edited={editedDraft} /> : null}
       <RecordPanels pkg={caseData.pkg} priorHistory={priorHistory} />
       <KnowledgePanel staticKnowledge={knowledge} hindsightLearning={hindsight.map(toHindsightView)} />
-      <LearningResult records={hindsight} />
+      <LearningResult
+        record={latestLearningForCase(hindsight, currentCase)}
+        learningSaved={currentCase.learningRef !== null}
+        reviewed={currentCase.reviewHistory.length > 0}
+        onUndo={onUndoLearning}
+      />
       <ThinkingState events={caseData.trace} onSelectEvent={setSelectedEvent} />
       <RawEvidenceSheet event={selectedEvent} />
     </main>
   );
+}
+
+function latestLearningForCase(
+  records: readonly LearningRecord[],
+  caseData: StoredCase,
+): LearningRecord | null {
+  const own = records.filter((r) => r.caseId === caseData.caseId);
+  return own[own.length - 1] ?? null;
 }
 
 function toHindsightView(record: LearningRecord): {

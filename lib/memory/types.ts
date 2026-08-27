@@ -18,6 +18,8 @@ export type LearningOutcome =
 export type ReviewerAction = "approve" | "reject" | "edit";
 
 export type LearningRecord = {
+  id?: string;
+  caseId?: string;
   topic: CaseTopic;
   outcome: LearningOutcome;
   reviewerAction: ReviewerAction;

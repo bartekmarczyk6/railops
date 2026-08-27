@@ -14,7 +14,7 @@ import type { StoredCase, TraceEvent } from "@/lib/storage/types.ts";
 import type { KnowledgeExcerpt, KnowledgePassage } from "@/lib/knowledge/types.ts";
 import { CaseReviewPage } from "@/components/review/case-review-page.tsx";
 import type { ReviewInput } from "@/lib/pipeline/review.ts";
-import { reviewCase } from "@/lib/pipeline/review.ts";
+import { reviewCase, revertLearning } from "@/lib/pipeline/review.ts";
 import type { KnowledgeExcerptView } from "@/components/review/knowledge-panel.tsx";
 
 type Params = { id: string };
@@ -175,7 +175,7 @@ export default async function CasePage({
     extractFromTrace(stored.trace, knowledgeIndex.passages) ?? fallbackPipelineOutputs();
 
   const knowledge = buildKnowledgeView(outputs.knowledge);
-  const hindsight: LearningRecord[] = state.learning.slice(-5);
+  const hindsight: LearningRecord[] = state.learning;
   const priorHistory = priorHistoryFromState(state, stored.pkg.account.id, stored.caseId);
 
   const memoryContext = await recallReviewerContext({
@@ -192,7 +192,7 @@ export default async function CasePage({
   ): Promise<{ error: string | null; case: StoredCase | null }> {
     "use server";
     try {
-      const updated = await reviewCase(input, { dataDir, memoryClient: null });
+      const updated = await reviewCase(input, { dataDir });
       return { error: null, case: updated };
     } catch (err) {
       const code =
@@ -201,6 +201,11 @@ export default async function CasePage({
           : "internal";
       return { error: code, case: null };
     }
+  }
+
+  async function onUndoLearning(learningId: string): Promise<void> {
+    "use server";
+    await revertLearning(learningId, { dataDir });
   }
 
   return (
@@ -218,6 +223,7 @@ export default async function CasePage({
       alternatives={alternativesFor(outputs.decision)}
       followUp={followUp}
       onReviewAction={onReviewAction}
+      onUndoLearning={onUndoLearning}
     />
   );
 }
