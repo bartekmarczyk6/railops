@@ -1,36 +1,6 @@
-/* transitions-dev snippets for Page 1 (Demo Cases) */
+/* transitions-dev snippets for Page 1 (Demo Cases)
+   Theme bridge moved to app/globals.css. */
 
-/* ── Theme bridge ────────────────────────────────────────────────
-   Registry components (COSS UI, ReUI) style themselves with the
-   shadcn token vocabulary (bg-popover, text-foreground, …). The app
-   only defines KOLEO tokens, so map the registry vocabulary onto
-   KOLEO once here. globals.css is off-limits for Page 1 work; this
-   file is imported by globals.css and processed by Tailwind. */
-@theme inline {
-  --color-background: var(--surface);
-  --color-foreground: var(--text);
-  --color-card: var(--surface-raised);
-  --color-card-foreground: var(--text);
-  --color-popover: var(--surface-raised);
-  --color-popover-foreground: var(--text);
-  --color-primary: var(--primary);
-  --color-primary-foreground: #ffffff;
-  --color-secondary: var(--surface-sunken);
-  --color-secondary-foreground: var(--text);
-  --color-muted: var(--surface-sunken);
-  --color-muted-foreground: var(--text-muted);
-  --color-accent: var(--surface-sunken);
-  --color-accent-foreground: var(--text);
-  --color-destructive: var(--error);
-  --color-border: var(--border);
-  --color-input: var(--border);
-  --color-ring: var(--primary);
-  --color-chart-1: var(--primary);
-  --color-chart-2: var(--primary);
-  --color-chart-3: var(--primary);
-  --color-chart-4: var(--primary);
-  --color-chart-5: var(--primary);
-}
 
 /* Registry components use bare `border`/`border-b` classes and rely
    on the shadcn base rule that sets the default border color. */

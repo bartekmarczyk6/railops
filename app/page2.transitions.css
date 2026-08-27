@@ -1,36 +1,5 @@
-/* transitions-dev snippets for Page 2 (Case Review) */
-
-/* Registry bridge: COSS/ReUI/beUI components read shadcn-style color
-   names (bg-popover, text-muted-foreground, …). Map them onto the KOLEO
-   tokens defined in globals.css so registry components render on-brand. */
-@theme inline {
-  --color-background: var(--surface);
-  --color-foreground: var(--text);
-  --color-primary: var(--primary);
-  --color-primary-foreground: #ffffff;
-  --color-secondary: var(--surface-sunken);
-  --color-secondary-foreground: var(--text);
-  --color-muted: var(--surface-sunken);
-  --color-muted-foreground: var(--text-muted);
-  --color-accent: var(--surface-sunken);
-  --color-accent-foreground: var(--text);
-  --color-card: var(--surface-raised);
-  --color-card-foreground: var(--text);
-  --color-popover: var(--surface-raised);
-  --color-popover-foreground: var(--text);
-  --color-destructive: var(--error);
-  --color-border: var(--border);
-  --color-input: var(--border);
-  --color-ring: var(--primary);
-}
-
-/* Tailwind v4 preflight defaults border-color to currentColor; registry
-   components rely on the shadcn convention of a neutral border token. */
-*,
-::before,
-::after {
-  border-color: var(--border);
-}
+/* transitions-dev snippets for Page 2 (Case Review)
+   Theme bridge moved to app/globals.css. */
 
 /* ── 28 · Thinking states ────────────────────────────────────────────
    Verbatim from docs/transitions/28-thinking-states.md. The :root

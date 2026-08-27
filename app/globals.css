@@ -51,6 +51,43 @@ body {
   outline-offset: 0;
 }
 
+/* Registry bridge: COSS/ReUI/beUI components style themselves with the
+   shadcn token vocabulary (bg-popover, text-muted-foreground, ...).
+   Map that vocabulary onto the KOLEO tokens above, once, app-wide. */
+@theme inline {
+  --color-background: var(--surface);
+  --color-foreground: var(--text);
+  --color-card: var(--surface-raised);
+  --color-card-foreground: var(--text);
+  --color-popover: var(--surface-raised);
+  --color-popover-foreground: var(--text);
+  --color-primary: var(--primary);
+  --color-primary-foreground: #ffffff;
+  --color-secondary: var(--surface-sunken);
+  --color-secondary-foreground: var(--text);
+  --color-muted: var(--surface-sunken);
+  --color-muted-foreground: var(--text-muted);
+  --color-accent: var(--surface-sunken);
+  --color-accent-foreground: var(--text);
+  --color-destructive: var(--error);
+  --color-border: var(--border);
+  --color-input: var(--border);
+  --color-ring: var(--primary);
+  --color-chart-1: var(--primary);
+  --color-chart-2: var(--primary);
+  --color-chart-3: var(--primary);
+  --color-chart-4: var(--primary);
+  --color-chart-5: var(--primary);
+}
+
+@layer base {
+  *,
+  ::before,
+  ::after {
+    border-color: var(--border);
+  }
+}
+
 @theme inline {
   --animate-skeleton: skeleton 2s -1s infinite linear;
   --animate-caret-blink: 1s ease-out infinite caret-blink;
