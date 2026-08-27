@@ -430,7 +430,7 @@ test("pipeline: rerun with a new runId appends a fresh event sequence", async ()
   });
 });
 
-test("reviewCase: approve transitions the case to approved with no external side effects", async () => {
+test("reviewCase: approve transitions the case to approved and stores an approve learning record", async () => {
   await withTempStore(async (dataDir) => {
     const stored = await seedCase(dataDir);
     const fake = makeFakeLlm();
@@ -446,13 +446,15 @@ test("reviewCase: approve transitions the case to approved with no external side
         action: "approve",
         expectedVersion: 2,
       } as ReviewInput,
-      { dataDir },
+      { dataDir, memoryClient: null },
     );
     assert.equal(updated.state, "approved");
     assert.equal(updated.reviewHistory.length, 1);
     assert.equal(updated.reviewHistory[0]?.action, "approve");
     const state = await readState({ dataDir });
-    assert.equal(state.learning.length, 0, "approval must not store a learning record");
+    assert.equal(state.learning.length, 1, "approval stores a learning record");
+    assert.equal(state.learning[0]?.reviewerAction, "approve");
+    assert.equal(state.learning[0]?.outcome, "refund");
   });
 });
 

@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { readState, updateState } from "../storage/store.ts";
 import type {
   AppState,
@@ -6,9 +8,14 @@ import type {
   StoredCase,
   TraceEvent,
 } from "../storage/types.ts";
-import { recallReviewerContext, retainReviewerLearning } from "../memory/hindsight.ts";
+import {
+  recallReviewerContext,
+  retainReviewerLearning,
+  undoReviewerLearning,
+} from "../memory/hindsight.ts";
 import type { CaseTopic, LearningRecord } from "../memory/types.ts";
-import type { DecisionDraft } from "../llm/types.ts";
+import { sanitizeLearningText } from "../memory/learning.ts";
+import type { DecisionDraft, DecisionOutcome } from "../llm/types.ts";
 
 import { createEvent } from "./events.ts";
 import { ReviewError, MaxRevisionsReached, MAX_REVISIONS } from "./run-case.ts";
@@ -32,7 +39,39 @@ export type ReviewOptions = {
   now?: () => Date;
 };
 
+const DECISION_OUTCOMES: ReadonlySet<DecisionOutcome> = new Set<DecisionOutcome>([
+  "refund",
+  "change",
+  "follow_up",
+  "unsupported_or_escalate",
+  "information",
+]);
+
+function isDecisionDraft(value: unknown): value is DecisionDraft {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const d = value as Record<string, unknown>;
+  return (
+    typeof d.outcome === "string" &&
+    DECISION_OUTCOMES.has(d.outcome as DecisionOutcome) &&
+    (d.proposedAmount === null || typeof d.proposedAmount === "number") &&
+    Array.isArray(d.decisionBasis) &&
+    typeof d.response === "string" &&
+    Array.isArray(d.evidenceRefs)
+  );
+}
+
+function latestDraftFromTrace(trace: readonly TraceEvent[]): DecisionDraft | null {
+  for (let i = trace.length - 1; i >= 0; i -= 1) {
+    const event = trace[i];
+    if (!event || event.stage !== "drafting" || event.status !== "completed") continue;
+    if (isDecisionDraft(event.payload)) return event.payload;
+  }
+  return null;
+}
+
 function makeLearningRecord(args: {
+  caseId: string;
+  id: string;
   topic: CaseTopic;
   outcome: DecisionDraft["outcome"];
   reviewerAction: "approve" | "reject" | "edit";
@@ -69,13 +108,17 @@ function makeLearningRecord(args: {
     changedGuidance.push(`reviewer feedback: ${args.feedback}`);
   }
   return {
+    id: args.id,
+    caseId: args.caseId,
     topic: args.topic,
-    outcome: args.outcome,
+    outcome: outcomeToLearning(args.outcome),
     reviewerAction: args.reviewerAction,
-    feedback: args.feedback ?? undefined,
-    originalDraftSummary: summary(args.originalDraft),
-    finalDraftSummary: summary(args.finalDraft),
-    changedGuidance,
+    feedback: args.feedback ? sanitizeLearningText(args.feedback) : undefined,
+    originalDraftSummary: sanitizeLearningText(summary(args.originalDraft)),
+    finalDraftSummary: sanitizeLearningText(summary(args.finalDraft)),
+    changedGuidance: changedGuidance
+      .map((g) => sanitizeLearningText(g))
+      .filter((g) => g.length > 0),
     timestamp: args.timestamp,
   };
 }
@@ -143,45 +186,54 @@ export async function reviewCase(
     timestamp: ts,
   };
 
-  let nextState: CaseState;
-  let learning: LearningRecord | null = null;
-  let persistLearning = false;
+  const originalDraft =
+    latestDraftFromTrace(state.events.filter((e) => e.caseId === existing.caseId)) ??
+    latestDraftFromTrace(existing.trace);
   const finalDraft: DecisionDraft | null =
-    input.action === "edit" && input.editedDraft ? input.editedDraft : null;
+    input.action === "edit" && input.editedDraft
+      ? input.editedDraft
+      : input.action === "approve"
+        ? originalDraft
+        : null;
 
+  let nextState: CaseState;
   if (input.action === "approve") {
     nextState = "approved";
   } else if (input.action === "reject") {
     nextState = "rejected";
-    learning = makeLearningRecord({
-      topic: existing.topic as CaseTopic,
-      outcome: "information",
-      reviewerAction: "reject",
-      feedback: input.feedback ?? null,
-      originalDraft: null,
-      finalDraft: null,
-      timestamp: ts,
-    });
-    persistLearning = true;
   } else {
     nextState = "revising";
-    learning = makeLearningRecord({
-      topic: existing.topic as CaseTopic,
-      outcome: outcomeToLearning(input.editedDraft?.outcome ?? null),
-      reviewerAction: "edit",
-      feedback: input.feedback ?? null,
-      originalDraft: null,
-      finalDraft: input.editedDraft ?? null,
-      timestamp: ts,
-    });
-    persistLearning = true;
   }
 
+  const learningId = `learning-${randomUUID()}`;
+  const learning = makeLearningRecord({
+    caseId: existing.caseId,
+    id: learningId,
+    topic: existing.topic as CaseTopic,
+    outcome:
+      input.action === "reject"
+        ? "information"
+        : (finalDraft ?? originalDraft)?.outcome ?? "information",
+    reviewerAction: input.action,
+    feedback: input.feedback ?? null,
+    originalDraft,
+    finalDraft,
+    timestamp: ts,
+  });
+
+  const knownEvents = [
+    ...existing.trace,
+    ...state.events.filter((e) => e.caseId === existing.caseId),
+  ];
+  const lastSeq = knownEvents.reduce((m, e) => (e.sequence > m ? e.sequence : m), 0);
+  const runId =
+    knownEvents.find((e) => e.sequence === lastSeq)?.runId ?? `run-${existing.caseId}`;
+  const reviewSeq = lastSeq + 1;
   const reviewTrace: TraceEvent = createEvent({
     caseId: existing.caseId,
-    runId: existing.trace[existing.trace.length - 1]?.runId ?? `run-${existing.caseId}`,
-    sequence: (existing.trace[existing.trace.length - 1]?.sequence ?? 0) + 1,
-    stage: nextState === "revising" ? "revising" : "learning_saved",
+    runId,
+    sequence: reviewSeq,
+    stage: nextState === "revising" ? "revising" : "reviewable",
     status: "completed",
     summary:
       input.action === "approve"
@@ -222,28 +274,54 @@ export async function reviewCase(
       ...s,
       cases,
       events,
-      learning: persistLearning && learning ? [...s.learning, learning] : s.learning,
+      learning: [...s.learning, learning],
     };
   }, { dataDir });
 
-  if (persistLearning && learning) {
-    try {
-      const result = await retainReviewerLearning({
-        record: learning,
-        client: options.memoryClient ?? null,
-      });
-      if (result.memoryId) {
-        const memId = result.memoryId;
-        await updateState((s) => {
-          const cases = s.cases.map((c) =>
-            c.caseId === existing.caseId ? { ...c, learningRef: memId } : c,
-          );
-          return { ...s, cases };
-        }, { dataDir });
-      }
-    } catch {
-    }
-  }
+  const retained = await retainReviewerLearning({
+    record: learning,
+    client: options.memoryClient,
+  });
+  const learningSaved = retained.memoryId !== null;
+  const learningTrace: TraceEvent = createEvent({
+    caseId: existing.caseId,
+    runId,
+    sequence: reviewSeq + 1,
+    stage: "learning_saved",
+    status: learningSaved ? "completed" : "failed",
+    summary: learningSaved
+      ? "Reviewer learning retained in Hindsight"
+      : "Learning kept locally: Hindsight unavailable",
+    functionName: "retainReviewerLearning",
+    recordRefs: [],
+    evidenceRefs: [],
+    payload: { learning_saved: learningSaved },
+    error: learningSaved ? null : "hindsight_unavailable",
+  });
+
+  await updateState((s: AppState) => {
+    const cases = s.cases.map((c) =>
+      c.caseId === existing.caseId
+        ? {
+            ...c,
+            learningRef: learningSaved ? retained.memoryId : c.learningRef,
+            trace: [...c.trace, learningTrace],
+          }
+        : c,
+    );
+    const learningRecords = learningSaved
+      ? s.learning.map((r) =>
+          r.id === learningId ? { ...r, id: retained.memoryId as string } : r,
+        )
+      : s.learning;
+    const events = [
+      ...s.events.filter(
+        (e) => !(e.caseId === existing.caseId && e.id === learningTrace.id),
+      ),
+      learningTrace,
+    ];
+    return { ...s, cases, learning: learningRecords, events };
+  }, { dataDir });
 
   const refreshed = (await readState({ dataDir })).cases.find(
     (c) => c.caseId === existing.caseId,
@@ -252,4 +330,37 @@ export async function reviewCase(
     throw new ReviewError("case_not_found", "case disappeared during review");
   }
   return refreshed;
+}
+
+export type RevertLearningOptions = {
+  dataDir?: string;
+  memoryClient?: Parameters<typeof recallReviewerContext>[0]["client"];
+};
+
+export type RevertLearningResult = { undone: boolean; error: string | null };
+
+export async function revertLearning(
+  learningId: string,
+  options: RevertLearningOptions = {},
+): Promise<RevertLearningResult> {
+  const dataDir = options.dataDir ?? DEFAULT_DATA_DIR;
+  const state = await readState({ dataDir });
+  const record = state.learning.find((r) => r.id === learningId);
+  const owner = state.cases.find((c) => c.learningRef === learningId);
+  if (!record && !owner) {
+    return { undone: false, error: "learning_not_found" };
+  }
+  await updateState((s: AppState) => ({
+    ...s,
+    learning: s.learning.filter((r) => r.id !== learningId),
+    cases: s.cases.map((c) =>
+      c.learningRef === learningId
+        ? { ...c, learningRef: null, updatedAt: new Date().toISOString() }
+        : c,
+    ),
+  }), { dataDir });
+  if (owner) {
+    await undoReviewerLearning({ memoryId: learningId, client: options.memoryClient });
+  }
+  return { undone: true, error: null };
 }

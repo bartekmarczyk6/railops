@@ -86,7 +86,7 @@ export async function POST(
   };
 
   try {
-    const updated = await reviewCase(input, { dataDir, memoryClient: null });
+    const updated = await reviewCase(input, { dataDir });
     return NextResponse.json(updated);
   } catch (err) {
     if (err instanceof MaxRevisionsReached) {

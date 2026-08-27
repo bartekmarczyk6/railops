@@ -4,7 +4,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 
 import { createDemoCase } from "../lib/domain/case-factory.ts";
-import type { StoredCase, TraceEvent } from "../lib/storage/types.ts";
+import type { StoredCase, TraceEvent, ReviewRecord } from "../lib/storage/types.ts";
+import type { LearningRecord } from "../lib/memory/types.ts";
 import type {
   DecisionDraft,
   EmailDraft,
@@ -379,4 +380,120 @@ test("DecisionBasisList: renders each claim, evidence ref, and note", () => {
   assert.match(html, /delay &gt; 30 min|delay > 30 min/);
   assert.match(html, /rule:1\.0\.0:delay_30/);
   assert.match(html, /record:ticket:TKT-000001/);
+});
+
+function makeReviewRecord(overrides: Partial<ReviewRecord> = {}): ReviewRecord {
+  return {
+    action: "approve",
+    reviewer: "demo-reviewer",
+    feedback: null,
+    editedOutcome: null,
+    editedAmount: null,
+    timestamp: "2026-08-27T01:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function makeLearningRecord(overrides: Partial<LearningRecord> = {}): LearningRecord {
+  return {
+    id: "learning-abc",
+    caseId: "case-x",
+    topic: "delay_refund",
+    outcome: "refund",
+    reviewerAction: "approve",
+    originalDraftSummary: "outcome=refund amount=50 refs=2",
+    finalDraftSummary: "outcome=refund amount=50 refs=2",
+    changedGuidance: ["Reviewer approved the draft as written."],
+    timestamp: "2026-08-27T01:00:00.000Z",
+    ...overrides,
+  };
+}
+
+test("CaseReviewPage: after approve, LearningResult shows the persisted learning summary", () => {
+  const stored = makeStoredCase({
+    state: "approved",
+    reviewHistory: [makeReviewRecord()],
+    learningRef: "learning-abc",
+  });
+  const record = makeLearningRecord({ caseId: stored.caseId, id: "learning-abc" });
+  const html = renderToStaticMarkup(
+    createElement(CaseReviewPage, buildPageProps({ caseData: stored, hindsight: [record] })),
+  );
+  assert.match(html, /data-component="learning-result"/);
+  assert.match(html, /What the AI Agent learned/);
+  assert.match(html, /Reviewer approved the draft as written/);
+  assert.match(html, /data-field="action-badge"[^>]*data-action="approve"/);
+  assert.match(html, /does not change deterministic eligibility/);
+});
+
+test("CaseReviewPage: undo control is visible after reject", () => {
+  const stored = makeStoredCase({
+    state: "rejected",
+    reviewHistory: [makeReviewRecord({ action: "reject", feedback: "amount should match policy" })],
+    learningRef: "learning-xyz",
+  });
+  const record = makeLearningRecord({
+    caseId: stored.caseId,
+    id: "learning-xyz",
+    reviewerAction: "reject",
+    outcome: "information",
+    changedGuidance: ["reviewer feedback: amount should match policy"],
+  });
+  const html = renderToStaticMarkup(
+    createElement(
+      CaseReviewPage,
+      buildPageProps({
+        caseData: stored,
+        hindsight: [record],
+        onUndoLearning: async () => {},
+      }),
+    ),
+  );
+  assert.match(html, /data-action="undo-learning"/);
+});
+
+test("CaseReviewPage: undo control is visible after edit", () => {
+  const stored = makeStoredCase({
+    state: "revising",
+    reviewHistory: [makeReviewRecord({ action: "edit", editedOutcome: "refund", editedAmount: 75 })],
+    learningRef: "learning-edit",
+  });
+  const record = makeLearningRecord({
+    caseId: stored.caseId,
+    id: "learning-edit",
+    reviewerAction: "edit",
+    finalDraftSummary: "outcome=refund amount=75 refs=1",
+    changedGuidance: ["amount changed from 50 to 75"],
+  });
+  const html = renderToStaticMarkup(
+    createElement(
+      CaseReviewPage,
+      buildPageProps({
+        caseData: stored,
+        hindsight: [record],
+        onUndoLearning: async () => {},
+      }),
+    ),
+  );
+  assert.match(html, /data-action="undo-learning"/);
+});
+
+test("CaseReviewPage: shows Hindsight unavailable warning when learning was not saved", () => {
+  const stored = makeStoredCase({
+    state: "rejected",
+    reviewHistory: [makeReviewRecord({ action: "reject", feedback: "not eligible" })],
+    learningRef: null,
+  });
+  const record = makeLearningRecord({
+    caseId: stored.caseId,
+    id: "learning-local-1",
+    reviewerAction: "reject",
+    outcome: "information",
+    changedGuidance: ["reviewer feedback: not eligible"],
+  });
+  const html = renderToStaticMarkup(
+    createElement(CaseReviewPage, buildPageProps({ caseData: stored, hindsight: [record] })),
+  );
+  assert.match(html, /data-field="learning-warning"/);
+  assert.match(html, /Hindsight unavailable/);
 });

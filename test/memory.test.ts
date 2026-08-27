@@ -28,6 +28,16 @@ import type {
   MemoryTraceEvent,
   CaseTopic,
 } from "../lib/memory/types";
+import {
+  reviewCase,
+  revertLearning,
+  MaxRevisionsReached,
+} from "../lib/pipeline/review";
+import { readState, updateState, resetState } from "../lib/storage/store";
+import type { StoredCase, TraceEvent } from "../lib/storage/types";
+import type { DecisionDraft } from "../lib/llm/types";
+import { createDemoCase } from "../lib/domain/case-factory";
+import { computeDashboardData } from "../app/dashboard-data";
 
 type MemoryRow = {
   id: string;
@@ -426,4 +436,315 @@ test("tombstone store survives a corrupt file by returning an empty set", async 
     const store = createTombstoneStore(path);
     assert.equal(store.load().size, 0);
   });
+});
+
+function makeDraft(overrides: Partial<DecisionDraft> = {}): DecisionDraft {
+  return {
+    outcome: "refund",
+    proposedAmount: 50,
+    decisionBasis: [
+      { claim: "delay 45 minutes", evidenceRef: "rule:1.0.0:delay_30", note: "threshold" },
+    ],
+    response: "Refund approved at 50% of paid price.",
+    evidenceRefs: ["rule:1.0.0:delay_30", "record:ticket:TKT-000001"],
+    ...overrides,
+  };
+}
+
+async function seedReviewableCase(dataDir: string, draft: DecisionDraft): Promise<StoredCase> {
+  const pkg = createDemoCase({ topic: "delay_refund", truthMode: "supported_by_records", seed: 7 });
+  const now = "2026-08-27T00:00:00.000Z";
+  const trace: TraceEvent[] = [
+    {
+      id: "evt-draft-1",
+      caseId: pkg.id,
+      runId: "run-1",
+      sequence: 1,
+      stage: "drafting",
+      status: "completed",
+      summary: "Drafted decision",
+      functionName: "DraftDecision",
+      recordRefs: [],
+      evidenceRefs: draft.evidenceRefs,
+      durationMs: 10,
+      error: null,
+      timestamp: now,
+      payload: draft,
+    },
+  ];
+  const stored: StoredCase = {
+    caseId: pkg.id,
+    topic: "delay_refund",
+    truthMode: "supported_by_records",
+    state: "reviewable",
+    createdAt: now,
+    updatedAt: now,
+    seed: 7,
+    pkg,
+    trace,
+    reviewHistory: [],
+    learningRef: null,
+    version: 2,
+  };
+  await updateState((s) => ({ ...s, cases: [...s.cases, stored] }), { dataDir });
+  return stored;
+}
+
+function withReviewStore<T>(fn: (dataDir: string) => Promise<T> | T): Promise<T> {
+  const dir = mkdtempSync(join(tmpdir(), "railops-review-"));
+  return Promise.resolve()
+    .then(() => fn(dir))
+    .finally(() => {
+      resetState();
+      resetMemoryAdapter();
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        /* ignore */
+      }
+    });
+}
+
+test("reviewCase approve without change persists a learning record with the original outcome and retains a sanitized payload", async () => {
+  await withReviewStore(async (dataDir) => {
+    setStoreFor(dataDir);
+    const fake = new FakeHindsightClient();
+    const stored = await seedReviewableCase(dataDir, makeDraft());
+    const updated = await reviewCase(
+      {
+        caseId: stored.caseId,
+        action: "approve",
+        feedback: "confirmed delay for tkt-12345",
+        expectedVersion: 2,
+      },
+      { dataDir, memoryClient: fake, now: () => new Date("2026-08-27T01:00:00.000Z") },
+    );
+    assert.equal(updated.state, "approved");
+    const state = await readState({ dataDir });
+    assert.equal(state.learning.length, 1);
+    const record = state.learning[0];
+    assert.ok(record);
+    assert.equal(record.outcome, "refund");
+    assert.equal(record.reviewerAction, "approve");
+    assert.equal(record.topic, "delay_refund");
+    assert.equal(record.originalDraftSummary, record.finalDraftSummary);
+    assert.match(record.originalDraftSummary, /outcome=refund amount=50/);
+    assert.ok(updated.learningRef && updated.learningRef.startsWith("learning-"));
+    assert.equal(record.id, updated.learningRef);
+    assert.equal(record.caseId, stored.caseId);
+    assert.equal(fake.retainCalls.length, 1);
+    const content = fake.retainCalls[0]?.content ?? "";
+    assert.match(content, /Outcome: refund/);
+    assert.match(content, /Reviewer action: approve/);
+    assert.equal(content.includes("tkt-12345"), false);
+    assert.match(content, /\[REDACTED-ID\]/);
+    const learningEvent = updated.trace.find((e) => e.stage === "learning_saved");
+    assert.ok(learningEvent, "a learning_saved trace event must be emitted");
+    assert.equal(learningEvent.status, "completed");
+  });
+});
+
+test("reviewCase reject with feedback derives changedGuidance from feedback", async () => {
+  await withReviewStore(async (dataDir) => {
+    setStoreFor(dataDir);
+    const fake = new FakeHindsightClient();
+    const stored = await seedReviewableCase(dataDir, makeDraft());
+    const updated = await reviewCase(
+      {
+        caseId: stored.caseId,
+        action: "reject",
+        feedback: "amount should match policy",
+        expectedVersion: 2,
+      },
+      { dataDir, memoryClient: fake },
+    );
+    assert.equal(updated.state, "rejected");
+    const state = await readState({ dataDir });
+    const record = state.learning.find((r) => r.caseId === stored.caseId);
+    assert.ok(record, "rejection must persist a learning record");
+    assert.equal(record.reviewerAction, "reject");
+    assert.equal(record.outcome, "information");
+    assert.ok(
+      record.changedGuidance.some((g) => g.includes("amount should match policy")),
+      "changedGuidance must be derived from reviewer feedback",
+    );
+    assert.equal(fake.retainCalls.length, 1);
+  });
+});
+
+test("reviewCase edit without reject records a structural diff between original and edited drafts", async () => {
+  await withReviewStore(async (dataDir) => {
+    setStoreFor(dataDir);
+    const fake = new FakeHindsightClient();
+    const stored = await seedReviewableCase(dataDir, makeDraft());
+    const edited = makeDraft({ proposedAmount: 75 });
+    const updated = await reviewCase(
+      {
+        caseId: stored.caseId,
+        action: "edit",
+        editedDraft: edited,
+        expectedVersion: 2,
+      },
+      { dataDir, memoryClient: fake },
+    );
+    assert.equal(updated.state, "revising");
+    const state = await readState({ dataDir });
+    const record = state.learning.find((r) => r.caseId === stored.caseId);
+    assert.ok(record, "edit must persist a learning record");
+    assert.equal(record.reviewerAction, "edit");
+    assert.match(record.originalDraftSummary, /amount=50/);
+    assert.match(record.finalDraftSummary, /amount=75/);
+    assert.ok(
+      record.changedGuidance.some((g) => g.includes("amount changed from 50 to 75")),
+      "edit learning must summarize the structural diff",
+    );
+  });
+});
+
+test("reviewCase allows exactly one revision then blocks further edits", async () => {
+  await withReviewStore(async (dataDir) => {
+    setStoreFor(dataDir);
+    const stored = await seedReviewableCase(dataDir, makeDraft());
+    const first = await reviewCase(
+      {
+        caseId: stored.caseId,
+        action: "edit",
+        editedDraft: makeDraft({ proposedAmount: 30 }),
+        expectedVersion: 2,
+      },
+      { dataDir, memoryClient: null },
+    );
+    assert.equal(first.state, "revising");
+    await assert.rejects(
+      () =>
+        reviewCase(
+          {
+            caseId: stored.caseId,
+            action: "edit",
+            editedDraft: makeDraft({ proposedAmount: 40 }),
+            expectedVersion: first.version,
+          },
+          { dataDir, memoryClient: null },
+        ),
+      (err: unknown) => err instanceof MaxRevisionsReached,
+    );
+    const state = await readState({ dataDir });
+    assert.equal(state.learning.length, 1, "blocked revision must not add learning");
+  });
+});
+
+test("reviewCase succeeds and emits a failed learning event when Hindsight is unavailable", async () => {
+  await withReviewStore(async (dataDir) => {
+    setStoreFor(dataDir);
+    const stored = await seedReviewableCase(dataDir, makeDraft());
+    const updated = await reviewCase(
+      {
+        caseId: stored.caseId,
+        action: "reject",
+        feedback: "not eligible under current policy",
+        expectedVersion: 2,
+      },
+      { dataDir, memoryClient: null },
+    );
+    assert.equal(updated.state, "rejected", "the gate must not depend on Hindsight");
+    assert.equal(updated.learningRef, null);
+    const learningEvent = updated.trace.find((e) => e.stage === "learning_saved");
+    assert.ok(learningEvent, "a learning trace event must be emitted");
+    assert.equal(learningEvent.status, "failed");
+    assert.match(learningEvent.error ?? "", /hindsight_unavailable/);
+    const state = await readState({ dataDir });
+    assert.equal(state.learning.length, 1, "learning stays local when Hindsight is down");
+  });
+});
+
+test("revertLearning removes the local record and calls undoReviewerLearning with the same memoryId", async () => {
+  await withReviewStore(async (dataDir) => {
+    const store = setStoreFor(dataDir);
+    const fake = new FakeHindsightClient();
+    const stored = await seedReviewableCase(dataDir, makeDraft());
+    const updated = await reviewCase(
+      {
+        caseId: stored.caseId,
+        action: "approve",
+        expectedVersion: 2,
+      },
+      { dataDir, memoryClient: fake },
+    );
+    const memoryId = updated.learningRef;
+    assert.ok(memoryId, "retain must produce a memoryId");
+    const result = await revertLearning(memoryId, { dataDir, memoryClient: fake });
+    assert.equal(result.undone, true);
+    assert.equal(result.error, null);
+    const state = await readState({ dataDir });
+    assert.equal(state.learning.length, 0, "local learning record must be removed");
+    const owner = state.cases.find((c) => c.caseId === stored.caseId);
+    assert.equal(owner?.learningRef, null, "local reference must be cleared");
+    assert.equal(fake.deleteCalls.length, 1);
+    assert.equal(fake.deleteCalls[0]?.documentId, memoryId);
+    assert.ok(store.load().has(memoryId), "tombstone must prevent recall of the memory");
+  });
+});
+
+function makeChartCase(overrides: Partial<StoredCase> & { caseId: string }): StoredCase {
+  const pkg = createDemoCase({ topic: "delay_refund", truthMode: "supported_by_records", seed: 7 });
+  const now = "2026-08-27T00:00:00.000Z";
+  const base: StoredCase = {
+    caseId: overrides.caseId,
+    topic: "delay_refund",
+    truthMode: "supported_by_records",
+    state: "reviewable",
+    createdAt: now,
+    updatedAt: now,
+    seed: 7,
+    pkg,
+    trace: [],
+    reviewHistory: [],
+    learningRef: null,
+    version: 2,
+  };
+  return { ...base, ...overrides };
+}
+
+test("chart aggregation counts only cases that have a review record", () => {
+  const approved = makeChartCase({
+    caseId: "c-1",
+    createdAt: "2026-08-27T01:00:00.000Z",
+    state: "approved",
+    reviewHistory: [
+      { action: "approve", reviewer: "demo", feedback: null, editedOutcome: null, editedAmount: null, timestamp: "2026-08-27T01:30:00.000Z" },
+    ],
+  });
+  const rejected = makeChartCase({
+    caseId: "c-2",
+    createdAt: "2026-08-27T02:00:00.000Z",
+    state: "rejected",
+    reviewHistory: [
+      { action: "reject", reviewer: "demo", feedback: "x", editedOutcome: null, editedAmount: null, timestamp: "2026-08-27T02:30:00.000Z" },
+    ],
+  });
+  const editedThenRerun = makeChartCase({
+    caseId: "c-3",
+    createdAt: "2026-08-27T03:00:00.000Z",
+    state: "reviewable",
+    reviewHistory: [
+      { action: "edit", reviewer: "demo", feedback: null, editedOutcome: "refund", editedAmount: 75, timestamp: "2026-08-27T03:30:00.000Z" },
+    ],
+  });
+  const unreviewed = makeChartCase({
+    caseId: "c-4",
+    createdAt: "2026-08-27T04:00:00.000Z",
+    state: "reviewable",
+  });
+  const data = computeDashboardData([approved, rejected, editedThenRerun, unreviewed]);
+  assert.equal(data.stats.reviewed, 3, "only cases with a ReviewRecord are reviewed");
+  assert.deepEqual(data.alignment, [
+    { caseSeq: 1, alignment: 1 },
+    { caseSeq: 2, alignment: 0 },
+    { caseSeq: 3, alignment: 0.5 },
+  ]);
+  assert.deepEqual(data.outcomes, [
+    { outcome: "denied", count: 1 },
+    { outcome: "draft", count: 1 },
+    { outcome: "refund", count: 1 },
+  ]);
 });
