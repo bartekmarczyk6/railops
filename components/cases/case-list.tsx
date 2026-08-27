@@ -1,7 +1,16 @@
 "use client";
 
+import { Button } from "../ui/button.tsx";
+import { Skeleton } from "../ui/skeleton.tsx";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "../ui/table.tsx";
 import type { StoredCase } from "../../lib/storage/types.ts";
-import { Table, TBody, TD, TH, THead, TR } from "../ui/table.tsx";
 import { CaseStatusPill } from "./case-status.tsx";
 
 const TOPIC_LABELS: Record<string, string> = {
@@ -71,123 +80,114 @@ export type CaseListProps = {
   onOpen: (caseId: string) => void;
   loading?: boolean;
   error?: string | null;
+  onCreate?: () => void;
 };
 
-export function CaseList({ cases, onOpen, loading, error }: CaseListProps) {
+export function CaseList({ cases, onOpen, loading, error, onCreate }: CaseListProps) {
   if (loading) {
     return (
       <div
         role="status"
         aria-live="polite"
         data-testid="case-list-loading"
-        className={
-          "rounded-[var(--radius-md)] border border-[color:var(--border)] " +
-          "bg-[color:var(--surface-raised)] p-6 text-sm text-[color:var(--text-muted)]"
-        }
+        className="flex flex-col gap-3"
       >
-        Loading cases
-        <span className="sr-only">. Press the retry button if this persists.</span>
-        <div className="mt-3">
+        <Skeleton className="h-10 w-full rounded-[var(--radius-md)]" />
+        <Skeleton className="h-10 w-full rounded-[var(--radius-md)]" />
+        <Skeleton className="h-10 w-full rounded-[var(--radius-md)]" />
+        <p className="text-sm text-[color:var(--text-muted)]">
+          Loading cases.{" "}
           <a
             href="/"
-            className="text-sm font-bold text-[color:var(--primary)] underline"
+            className="font-bold text-[color:var(--primary)] underline underline-offset-4"
           >
             Retry
-          </a>
-        </div>
+          </a>{" "}
+          if this persists.
+        </p>
       </div>
     );
   }
+
   if (error) {
     return (
       <div
         role="alert"
         data-testid="case-list-error"
-        className={
-          "rounded-[var(--radius-md)] border border-[color:var(--error)] " +
-          "bg-[color:var(--surface-raised)] p-6"
-        }
+        className="flex flex-col items-start gap-3 rounded-[var(--radius-md)] border border-[color:var(--error)] bg-[color:var(--surface-raised)] p-6"
       >
         <p className="text-sm text-[color:var(--error)]">{error}</p>
-        <div className="mt-3">
-          <a
-            href="/"
-            className="text-sm font-bold text-[color:var(--primary)] underline"
-          >
-            Reload the page
-          </a>
-        </div>
+        <Button variant="outline" render={<a href="/" />}>
+          Reload the page
+        </Button>
       </div>
     );
   }
+
   if (cases.length === 0) {
     return (
       <div
         data-testid="case-list-empty"
-        className={
-          "rounded-[var(--radius-md)] border border-dashed " +
-          "border-[color:var(--border)] bg-[color:var(--surface-raised)] p-6 " +
-          "text-sm text-[color:var(--text-muted)]"
-        }
+        className="flex flex-col items-start gap-3 rounded-[var(--radius-md)] border border-dashed border-[color:var(--border)] bg-[color:var(--surface-raised)] p-6"
       >
-        <p>No cases yet.</p>
+        <p className="text-sm text-[color:var(--text-muted)]">No cases yet.</p>
+        {onCreate ? (
+          <Button data-testid="case-list-create" onClick={onCreate}>
+            Create demo case
+          </Button>
+        ) : null}
       </div>
     );
   }
 
   return (
-    <div className="overflow-x-auto rounded-[var(--radius-md)] border border-[color:var(--border)]">
-      <Table>
-        <THead>
-          <TR>
-            <TH>Case</TH>
-            <TH>Topic</TH>
-            <TH>Truth mode</TH>
-            <TH>Pipeline status</TH>
-            <TH>Reviewer outcome</TH>
-            <TH>Learning</TH>
-            <TH>Created</TH>
-          </TR>
-        </THead>
-        <TBody>
-          {cases.map((c) => (
-            <TR
-              key={c.caseId}
-              data-testid={`case-row-${c.caseId}`}
-              className="cursor-pointer hover:bg-[color:var(--surface-sunken)]"
-              onClick={() => onOpen(c.caseId)}
-            >
-              <TD>
-                <a
-                  href={`/case/${c.caseId}`}
-                  className="font-bold text-[color:var(--primary)] underline"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    onOpen(c.caseId);
-                  }}
-                >
-                  {c.caseId}
-                </a>
-              </TD>
-              <TD>{topicLabel(c.topic)}</TD>
-              <TD>{truthModeLabel(c.truthMode)}</TD>
-              <TD>
-                <CaseStatusPill state={c.state} />
-              </TD>
-              <TD>{reviewerOutcomeLabel(c)}</TD>
-              <TD>{learningStateLabel(c)}</TD>
-              <TD>
-                <time
-                  dateTime={c.createdAt}
-                  data-testid={`created-time-${c.caseId}`}
-                >
-                  {formatCreatedAt(c.createdAt)}
-                </time>
-              </TD>
-            </TR>
-          ))}
-        </TBody>
-      </Table>
-    </div>
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Case</TableHead>
+          <TableHead>Topic</TableHead>
+          <TableHead>Truth mode</TableHead>
+          <TableHead>Pipeline status</TableHead>
+          <TableHead>Reviewer outcome</TableHead>
+          <TableHead>Learning</TableHead>
+          <TableHead>Created</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {cases.map((c) => (
+          <TableRow
+            key={c.caseId}
+            data-testid={`case-row-${c.caseId}`}
+            className="cursor-pointer"
+            onClick={() => onOpen(c.caseId)}
+          >
+            <TableCell>
+              <a
+                href={`/case/${c.caseId}`}
+                className="font-bold text-[color:var(--primary)] underline underline-offset-4"
+                onClick={(e) => {
+                  e.preventDefault();
+                  onOpen(c.caseId);
+                }}
+              >
+                {c.caseId}
+              </a>
+            </TableCell>
+            <TableCell>{topicLabel(c.topic)}</TableCell>
+            <TableCell>{truthModeLabel(c.truthMode)}</TableCell>
+            <TableCell>
+              <CaseStatusPill state={c.state} />
+            </TableCell>
+            <TableCell>{reviewerOutcomeLabel(c)}</TableCell>
+            <TableCell>{learningStateLabel(c)}</TableCell>
+            <TableCell>
+              <time dateTime={c.createdAt} data-testid={`created-time-${c.caseId}`}>
+                {formatCreatedAt(c.createdAt)}
+              </time>
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   );
 }
