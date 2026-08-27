@@ -28,7 +28,7 @@ every day.
 To make the demo honest, I simulate the whole world: every passenger, ticket,
 payment, route, disruption and inbound email is synthetic, generated
 deterministically from a seed. The same seed always produces the same case and
-the same ground truth, so the pipeline's behaviour can be tested and scored.
+the same ground truth, so the pipeline's behavior can be tested and scored.
 
 ## Try the live demo
 
@@ -190,8 +190,9 @@ like personal data is fake.
 
 **No external actions.** The demo never sends email, refunds money, changes
 tickets, or touches real accounts, trains or payment systems. Approving a
-decision only updates local state. The only outbound calls are the model API
-and, locally, the optional Hindsight memory server.
+decision only updates local state. The only outbound calls are the model API,
+the optional PLK route-data API when a key is configured, and, locally, the
+optional Hindsight memory server.
 
 ## Repository layout
 
@@ -207,4 +208,5 @@ and, locally, the optional Hindsight memory server.
 | `baml_src/` | BAML contracts for every model call |
 | `knowledge/` | The scoped policy knowledge base (Markdown + index) |
 | `scripts/` | Cross-platform setup wizards and tooling |
-| `test/` | Full test suite and deterministic fixtures |
+| `test/` | Full test suite |
+| `fixtures/` | Deterministic eval fixtures — one per topic and truth mode |
