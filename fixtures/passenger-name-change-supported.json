@@ -1,0 +1,11 @@
+{
+  "fixtureId": "passenger-name-change-supported",
+  "topic": "passenger_name_change",
+  "truthMode": "supported_by_records",
+  "seed": 51,
+  "expected": {
+    "outcome": "eligible",
+    "amountIsSet": true,
+    "minEvidenceRefs": 2
+  }
+}

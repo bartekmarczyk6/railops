@@ -1,0 +1,11 @@
+{
+  "fixtureId": "ticket-change-supported",
+  "topic": "ticket_change",
+  "truthMode": "supported_by_records",
+  "seed": 41,
+  "expected": {
+    "outcome": "eligible",
+    "amountIsSet": true,
+    "minEvidenceRefs": 2
+  }
+}

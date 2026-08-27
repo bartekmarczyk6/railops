@@ -5,6 +5,12 @@ import type {
   CritiqueReport,
 } from "../llm/types.ts";
 import type { LlmClient } from "./run-case.ts";
+import {
+  generateCustomerEmail,
+  extractCaseClaims,
+  draftDecision,
+  critiqueDecision,
+} from "../llm/baml.ts";
 import type {
   GenerateEmailInput,
   ExtractClaimsInput,
@@ -51,15 +57,24 @@ function makeFakeLlm(): LlmClient {
   };
 }
 
+function makeRealLlm(): LlmClient {
+  return {
+    generateCustomerEmail: (input, signal) => generateCustomerEmail(input, signal),
+    extractCaseClaims: (input, signal) => extractCaseClaims(input, signal),
+    draftDecision: (input, signal) => draftDecision(input, signal),
+    critiqueDecision: (input, signal) => critiqueDecision(input, signal),
+  };
+}
+
 let cached: LlmClient | null = null;
 
 export function getLlmClient(): LlmClient {
   if (cached) return cached;
-  const useReal = process.env.RAILOPS_USE_REAL_LLM === "1";
-  if (useReal) {
-    throw new Error("RAILOPS_USE_REAL_LLM=1 is set but real BAML client is not yet wired");
+  if (process.env.RAILOPS_FAKE_LLM === "1") {
+    cached = makeFakeLlm();
+    return cached;
   }
-  cached = makeFakeLlm();
+  cached = makeRealLlm();
   return cached;
 }
 

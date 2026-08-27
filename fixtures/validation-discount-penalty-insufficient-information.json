@@ -1,0 +1,10 @@
+{
+  "fixtureId": "validation-discount-penalty-insufficient-information",
+  "topic": "validation_discount_penalty",
+  "truthMode": "insufficient_information",
+  "seed": 82,
+  "expected": {
+    "outcome": "follow_up_required",
+    "minEvidenceRefs": 1
+  }
+}

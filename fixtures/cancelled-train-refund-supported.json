@@ -1,0 +1,11 @@
+{
+  "fixtureId": "cancelled-train-refund-supported",
+  "topic": "cancelled_train_refund",
+  "truthMode": "supported_by_records",
+  "seed": 21,
+  "expected": {
+    "outcome": "eligible",
+    "amountIsSet": true,
+    "minEvidenceRefs": 3
+  }
+}

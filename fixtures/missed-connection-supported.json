@@ -1,0 +1,11 @@
+{
+  "fixtureId": "missed-connection-supported",
+  "topic": "missed_connection",
+  "truthMode": "supported_by_records",
+  "seed": 31,
+  "expected": {
+    "outcome": "eligible",
+    "amountIsSet": true,
+    "minEvidenceRefs": 3
+  }
+}

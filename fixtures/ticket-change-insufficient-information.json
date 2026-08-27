@@ -1,0 +1,10 @@
+{
+  "fixtureId": "ticket-change-insufficient-information",
+  "topic": "ticket_change",
+  "truthMode": "insufficient_information",
+  "seed": 42,
+  "expected": {
+    "outcome": "follow_up_required",
+    "minEvidenceRefs": 1
+  }
+}

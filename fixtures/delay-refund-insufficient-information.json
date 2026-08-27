@@ -1,0 +1,10 @@
+{
+  "fixtureId": "delay-refund-insufficient-information",
+  "topic": "delay_refund",
+  "truthMode": "insufficient_information",
+  "seed": 10,
+  "expected": {
+    "outcome": "follow_up_required",
+    "minEvidenceRefs": 1
+  }
+}

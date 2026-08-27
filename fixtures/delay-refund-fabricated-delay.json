@@ -1,0 +1,11 @@
+{
+  "fixtureId": "delay-refund-fabricated-delay",
+  "topic": "delay_refund",
+  "truthMode": "fabricated_delay",
+  "seed": 8,
+  "expected": {
+    "outcome": "not_eligible",
+    "minEvidenceRefs": 3,
+    "mustNotContain": ["fraud", "fraudulent", "scam"]
+  }
+}

@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  serverExternalPackages: ["@boundaryml/baml"],
   webpack(config) {
     config.resolve = config.resolve ?? {};
     config.resolve.extensionAlias = {

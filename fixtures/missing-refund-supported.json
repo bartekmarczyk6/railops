@@ -1,0 +1,10 @@
+{
+  "fixtureId": "missing-refund-supported",
+  "topic": "missing_refund",
+  "truthMode": "supported_by_records",
+  "seed": 61,
+  "expected": {
+    "outcome": "follow_up_required",
+    "minEvidenceRefs": 2
+  }
+}

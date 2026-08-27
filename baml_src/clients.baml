@@ -19,6 +19,6 @@ client<llm> GroqClient {
   options {
     base_url "https://api.groq.com/openai/v1"
     api_key env.GROQ_API_KEY
-    model env.GROQ_MODEL
+    model "openai/gpt-oss-120b"
   }
 }

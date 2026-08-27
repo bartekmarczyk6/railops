@@ -1,0 +1,11 @@
+{
+  "fixtureId": "delay-refund-fraud-attempt",
+  "topic": "delay_refund",
+  "truthMode": "fraud_attempt",
+  "seed": 9,
+  "expected": {
+    "outcome": "escalate",
+    "minEvidenceRefs": 2,
+    "mustNotContain": ["fraud", "fraudulent", "scam", "lie", "criminal"]
+  }
+}

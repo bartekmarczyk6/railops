@@ -1,0 +1,11 @@
+{
+  "fixtureId": "delay-refund-supported",
+  "topic": "delay_refund",
+  "truthMode": "supported_by_records",
+  "seed": 7,
+  "expected": {
+    "outcome": "eligible",
+    "amountIsSet": true,
+    "minEvidenceRefs": 3
+  }
+}

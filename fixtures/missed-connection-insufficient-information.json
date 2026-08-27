@@ -1,0 +1,10 @@
+{
+  "fixtureId": "missed-connection-insufficient-information",
+  "topic": "missed_connection",
+  "truthMode": "insufficient_information",
+  "seed": 32,
+  "expected": {
+    "outcome": "follow_up_required",
+    "minEvidenceRefs": 1
+  }
+}

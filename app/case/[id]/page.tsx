@@ -165,6 +165,11 @@ export default async function CasePage({
     );
   }
 
+  const caseEvents = [
+    ...state.events.filter((e) => e.caseId === id),
+    ...stored.trace.filter((e) => !state.events.some((s) => s.id === e.id)),
+  ].sort((a, b) => a.sequence - b.sequence || a.timestamp.localeCompare(b.timestamp));
+
   let knowledgeIndex: { passages: KnowledgePassage[] } = { passages: [] };
   try {
     knowledgeIndex = await loadKnowledgeIndex(KNOWLEDGE_INDEX_PATH);
@@ -172,7 +177,7 @@ export default async function CasePage({
     knowledgeIndex = { passages: [] };
   }
   const outputs =
-    extractFromTrace(stored.trace, knowledgeIndex.passages) ?? fallbackPipelineOutputs();
+    extractFromTrace(caseEvents, knowledgeIndex.passages) ?? fallbackPipelineOutputs();
 
   const knowledge = buildKnowledgeView(outputs.knowledge);
   const hindsight: LearningRecord[] = state.learning;
@@ -210,7 +215,7 @@ export default async function CasePage({
 
   return (
     <CaseReviewPage
-      caseData={stored}
+      caseData={{ ...stored, trace: caseEvents }}
       email={outputs.email}
       claims={outputs.claims}
       decision={outputs.decision}
