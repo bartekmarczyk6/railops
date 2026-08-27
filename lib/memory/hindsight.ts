@@ -1,7 +1,5 @@
-import { HindsightClient } from "@vectorize-io/hindsight-client";
 import {
   buildLearningContent,
-  createTombstoneStore,
   learningMetadata,
   learningTags,
   type TombstoneStore,
@@ -77,7 +75,7 @@ export type HindsightLike = {
 };
 
 let listener: MemoryTraceListener | null = null;
-let tombstoneStore: TombstoneStore = createTombstoneStore(".railops/memory/tombstones.json");
+let tombstoneStore: TombstoneStore = createMemoryTombstoneStore();
 
 export function setMemoryTraceListener(next: MemoryTraceListener | null): void {
   listener = next;
@@ -89,7 +87,21 @@ export function setTombstoneStore(store: TombstoneStore): void {
 
 export function resetMemoryAdapter(): void {
   listener = null;
-  tombstoneStore = createTombstoneStore(".railops/memory/tombstones.json");
+  tombstoneStore = createMemoryTombstoneStore();
+}
+
+function createMemoryTombstoneStore(): TombstoneStore {
+  const ids = new Set<string>();
+  return {
+    path: "(memory)",
+    load: () => new Set(ids),
+    add: (memoryId: string) => {
+      ids.add(memoryId);
+    },
+    remove: (memoryId: string) => {
+      ids.delete(memoryId);
+    },
+  };
 }
 
 function emit(event: MemoryTraceEvent): void {
@@ -101,65 +113,10 @@ function reasonFromError(err: unknown): string {
   return "unknown_error";
 }
 
-export function getHindsightClient(env: NodeJS.ProcessEnv = process.env): HindsightLike | null {
-  const url = env[HINDSIGHT_API_URL_ENV];
-  if (!url || url.length === 0) return null;
-  const apiKey = env[HINDSIGHT_API_KEY_ENV];
-  const client = new HindsightClient({
-    baseUrl: url,
-    ...(apiKey ? { apiKey } : {}),
-  });
-  return toLike(client);
-}
-
-function toLike(client: HindsightClient): HindsightLike {
-  return {
-    recall: async (bankId, query, options) => {
-      const response = await client.recall(bankId, query, options);
-      const results: RecallResultLike[] = (response.results ?? []).map((r) => ({
-        id: r.id,
-        text: r.text,
-        type: r.type ?? null,
-        context: r.context ?? null,
-        metadata: r.metadata ?? null,
-        tags: r.tags ?? null,
-        document_id: r.document_id ?? null,
-      }));
-      return { results };
-    },
-    retain: async (bankId, content, options) => {
-      const response = await client.retain(bankId, content, options);
-      return {
-        success: response.success,
-        bank_id: response.bank_id,
-        items_count: response.items_count,
-        async: response.async,
-        operation_id: response.operation_id ?? null,
-        operation_ids: response.operation_ids ?? null,
-      };
-    },
-    deleteDocument: (bankId, documentId, options) => client.deleteDocument(bankId, documentId, options),
-    listMentalModels: async (bankId, options) => {
-      const response = await client.listMentalModels(bankId, options);
-      const mental_models: MentalModelSummaryLike[] = (response.items ?? []).map((m) => ({
-        id: m.id,
-        name: m.name,
-      }));
-      return { mental_models };
-    },
-    createBank: async (bankId, options) => {
-      const response = await client.createBank(bankId, options);
-      return { bank_id: response.bank_id };
-    },
-    createMentalModel: async (bankId, name, sourceQuery, options) => {
-      const response = await client.createMentalModel(bankId, name, sourceQuery, options);
-      return { id: response.mental_model_id ?? `mm-${Date.now()}`, name };
-    },
-    getBankProfile: async (bankId, options) => {
-      const response = await client.getBankProfile(bankId, options);
-      return { bank_id: response.bank_id };
-    },
-  };
+/* Demo branch: reviewer memory is paused. Every call site already handles a
+ * null client by degrading to local-only learning. */
+export function getHindsightClient(_env: NodeJS.ProcessEnv = process.env): HindsightLike | null {
+  return null;
 }
 
 export type RecallOptions = {
