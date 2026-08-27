@@ -6,6 +6,12 @@ import { CircleCheck } from "lucide-react";
 
 import { Shimmer } from "../beui/atoms/Shimmer.tsx";
 import { Button } from "../ui/button.tsx";
+import { createDemoCase } from "../../lib/domain/case-factory.ts";
+import type { DemoCasePackage } from "../../lib/domain/types.ts";
+import type { EmailDraft } from "../../lib/llm/types.ts";
+import { isCaseTopic, isTruthMode } from "../../app/api/_shared/validation.ts";
+import { updateBrowserState } from "../../lib/storage/browser-store.ts";
+import type { StoredCase } from "../../lib/storage/types.ts";
 import {
   Dialog,
   DialogClose,
@@ -101,12 +107,12 @@ export const TRUTH_MODE_OPTIONS: ReadonlyArray<TopicOption> = [
 
 type FetchImpl = (
   url: string,
-  init: { method: string; headers?: Record<string, string>; body?: string },
+  init: { method: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal },
 ) => Promise<Response>;
 
 const defaultFetch: FetchImpl = (url, init) => fetch(url, init);
 
-type FormStatus = "idle" | "loading" | "feeding" | "success" | "error";
+type FormStatus = "idle" | "feeding" | "success" | "error";
 
 export const CREATE_FEED_LINES: ReadonlyArray<string> = [
   "Creating passenger profile…",
@@ -160,40 +166,6 @@ export function CreateLoadingFeed({ doneCount }: CreateLoadingFeedProps): React.
   );
 }
 
-export type PollCaseEmailOptions = {
-  pollMs?: number;
-  capMs?: number;
-  shouldStop?: () => boolean;
-};
-
-/* Poll GET /api/cases/[id] until the background email generation lands
- * (email != null). Resolves true when the email appeared, false when the
- * cap was hit (the case page handles an in-flight email). */
-export async function pollCaseEmail(
-  fetchImpl: FetchImpl,
-  caseId: string,
-  options: PollCaseEmailOptions = {},
-): Promise<boolean> {
-  const pollMs = options.pollMs ?? 700;
-  const capMs = options.capMs ?? 10_000;
-  const shouldStop = options.shouldStop ?? (() => false);
-  const startedAt = Date.now();
-  for (;;) {
-    if (shouldStop()) return false;
-    try {
-      const res = await fetchImpl(`/api/cases/${caseId}`, { method: "GET" });
-      if (res.ok) {
-        const data = (await res.json()) as { email?: unknown };
-        if (data && typeof data === "object" && data.email != null) return true;
-      }
-    } catch {
-      /* keep polling until the cap */
-    }
-    if (Date.now() - startedAt >= capMs) return false;
-    await new Promise((resolve) => setTimeout(resolve, pollMs));
-  }
-}
-
 export type CreateCaseFormProps = {
   onCreated: (caseId: string) => void;
   fetchImpl?: FetchImpl;
@@ -211,7 +183,7 @@ export function CreateCaseForm({
   const [truthMode, setTruthMode] = useState(initialTruthMode);
   const [status, setStatus] = useState<FormStatus>("idle");
   const [error, setError] = useState<string | null>(null);
-  const [createdCaseId, setCreatedCaseId] = useState<string | null>(null);
+  const [pending, setPending] = useState<{ seed: number; pkg: DemoCasePackage } | null>(null);
   const [feedDone, setFeedDone] = useState(0);
 
   const fetchImplRef = useRef(fetchImpl);
@@ -219,35 +191,84 @@ export function CreateCaseForm({
   const onCreatedRef = useRef(onCreated);
   onCreatedRef.current = onCreated;
 
-  const busy = status === "loading";
-  const canSubmit = topic !== "" && truthMode !== "" && !busy;
+  const canSubmit = topic !== "" && truthMode !== "";
 
   useEffect(() => {
-    if (status !== "feeding" || createdCaseId === null) return;
+    if (status !== "feeding" || pending === null) return;
     let cancelled = false;
+    const controller = new AbortController();
     const timers: Array<ReturnType<typeof setTimeout>> = [];
+    const { seed, pkg } = pending;
     setFeedDone(1);
     timers.push(setTimeout(() => { if (!cancelled) setFeedDone(2); }, 600));
     timers.push(setTimeout(() => { if (!cancelled) setFeedDone(3); }, 1200));
     void (async () => {
-      await pollCaseEmail(fetchImplRef.current, createdCaseId, {
-        shouldStop: () => cancelled,
-      });
-      if (cancelled) return;
-      setFeedDone(4);
-      timers.push(
-        setTimeout(() => {
-          if (cancelled) return;
-          setStatus("success");
-          onCreatedRef.current(createdCaseId);
-        }, 350),
-      );
+      try {
+        const res = await fetchImplRef.current("/api/cases/email", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ topic: pkg.topic, truthMode: pkg.truthMode, seed }),
+          signal: controller.signal,
+        });
+        if (!res.ok) {
+          const data = (await res.json().catch(() => null)) as { message?: string } | null;
+          throw new Error(data?.message ?? `Email generation failed (${res.status})`);
+        }
+        const data = (await res.json()) as { email?: EmailDraft | null };
+        if (!data.email) {
+          throw new Error("The server did not return an email.");
+        }
+        if (cancelled) return;
+        const now = new Date().toISOString();
+        const stored: StoredCase = {
+          caseId: pkg.id,
+          topic: pkg.topic,
+          truthMode: pkg.truthMode,
+          state: "created",
+          createdAt: now,
+          updatedAt: now,
+          seed,
+          pkg,
+          trace: [],
+          reviewHistory: [],
+          learningRef: null,
+          email: {
+            from: pkg.account.email,
+            subject: data.email.subject,
+            body: data.email.body,
+            mentionedFacts: data.email.mentionedFacts,
+            receivedAt: now,
+          },
+          emailError: null,
+          supplements: {},
+          version: 1,
+        };
+        updateBrowserState((s) => ({ ...s, cases: [...s.cases, stored] }));
+        setFeedDone(4);
+        timers.push(
+          setTimeout(() => {
+            if (cancelled) return;
+            setStatus("success");
+            onCreatedRef.current(pkg.id);
+          }, 350),
+        );
+      } catch (err) {
+        if (cancelled) return;
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        if (err instanceof TypeError) {
+          setError("Network error. Please try again.");
+        } else {
+          setError(err instanceof Error ? err.message : String(err));
+        }
+        setStatus("error");
+      }
     })();
     return () => {
       cancelled = true;
+      controller.abort();
       for (const timer of timers) clearTimeout(timer);
     };
-  }, [status, createdCaseId]);
+  }, [status, pending]);
 
   if (status === "feeding") {
     return (
@@ -285,34 +306,15 @@ export function CreateCaseForm({
     );
   }
 
-  async function handleSubmit(e: React.FormEvent) {
+  function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!canSubmit) return;
-    setStatus("loading");
+    if (!isCaseTopic(topic) || !isTruthMode(truthMode)) return;
     setError(null);
-    try {
-      const res = await fetchImpl("/api/cases", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ topic, truthMode }),
-      });
-      if (!res.ok) {
-        setError("Could not create the case. Please try again.");
-        setStatus("error");
-        return;
-      }
-      const data = (await res.json()) as { caseId?: string };
-      if (typeof data.caseId !== "string" || data.caseId.length === 0) {
-        setError("The server did not return a case id.");
-        setStatus("error");
-        return;
-      }
-      setCreatedCaseId(data.caseId);
-      setStatus("feeding");
-    } catch {
-      setError("Network error. Please try again.");
-      setStatus("error");
-    }
+    const seed = Math.floor(Math.random() * 2 ** 31);
+    const pkg = createDemoCase({ topic, truthMode, seed });
+    setPending({ seed, pkg });
+    setStatus("feeding");
   }
 
   return (
@@ -324,7 +326,6 @@ export function CreateCaseForm({
             items={TOPIC_OPTIONS}
             value={topic === "" ? null : topic}
             onValueChange={(value: string | null) => setTopic(value ?? "")}
-            disabled={busy}
             name="topic"
           >
             <SelectTrigger data-testid="topic-select" data-select-for="topic">
@@ -350,7 +351,6 @@ export function CreateCaseForm({
             items={TRUTH_MODE_OPTIONS}
             value={truthMode === "" ? null : truthMode}
             onValueChange={(value: string | null) => setTruthMode(value ?? "")}
-            disabled={busy}
             name="truthMode"
           >
             <SelectTrigger data-testid="truthmode-select" data-select-for="truthMode">
@@ -377,15 +377,14 @@ export function CreateCaseForm({
         ) : null}
       </DialogPanel>
       <DialogFooter>
-        <DialogClose render={<Button variant="ghost" />} disabled={busy}>
+        <DialogClose render={<Button variant="ghost" />}>
           Cancel
         </DialogClose>
         <StatefulButton
           type="submit"
           data-testid="create-submit"
-          state={status === "error" ? "error" : busy ? "loading" : "idle"}
+          state={status === "error" ? "error" : "idle"}
           disabled={!canSubmit}
-          loadingText="Creating case"
           errorText="Try again"
         >
           Create case

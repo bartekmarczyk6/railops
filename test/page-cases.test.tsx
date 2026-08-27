@@ -12,7 +12,6 @@ import {
   CreateCaseForm,
   CreateLoadingFeed,
   CREATE_FEED_LINES,
-  pollCaseEmail,
   TOPIC_OPTIONS,
   TRUTH_MODE_OPTIONS,
 } from "../components/cases/create-case-dialog.tsx";
@@ -300,38 +299,4 @@ test("create dialog: loading feed renders all lines with shimmer on the active l
   assert.match(html, /Passenger is writing an email…/);
   const checks = html.match(/<svg/g) ?? [];
   assert.ok(checks.length >= 2, "done lines carry check icons");
-});
-
-test("create dialog: loading feed holds the email line active until the polled GET returns an email", async () => {
-  let getCalls = 0;
-  const fetchImpl = async (url: string, init: { method: string }) => {
-    assert.equal(url, "/api/cases/c-new");
-    assert.equal(init.method, "GET");
-    getCalls += 1;
-    const email =
-      getCalls >= 2
-        ? {
-            from: "alice@example.com",
-            subject: "Delay refund request",
-            body: "My train was delayed.",
-            mentionedFacts: [],
-            receivedAt: "2026-08-27T00:00:00.000Z",
-          }
-        : null;
-    return new Response(JSON.stringify({ caseId: "c-new", email }), { status: 200 });
-  };
-  const appeared = await pollCaseEmail(fetchImpl, "c-new", { pollMs: 5, capMs: 2000 });
-  assert.equal(appeared, true, "poll resolves once email != null");
-  assert.equal(getCalls, 2, "navigates as soon as the email appears");
-});
-
-test("create dialog: loading feed gives up after the cap when no email arrives", async () => {
-  let getCalls = 0;
-  const fetchImpl = async () => {
-    getCalls += 1;
-    return new Response(JSON.stringify({ caseId: "c-new", email: null }), { status: 200 });
-  };
-  const appeared = await pollCaseEmail(fetchImpl, "c-new", { pollMs: 5, capMs: 30 });
-  assert.equal(appeared, false, "cap hit without an email");
-  assert.ok(getCalls >= 1, "polled at least once before the cap");
 });
