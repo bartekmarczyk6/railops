@@ -309,3 +309,50 @@ test("case factory: missed_connection has two tickets on the same route with a d
   assert.ok(c.disruption !== null);
   assert.equal(c.disruption!.type, "missed_connection");
 });
+
+test("case factory: createDemoCase accepts an injected id seam", () => {
+  let counter = 0;
+  const pkg = createDemoCase({
+    topic: "delay_refund",
+    truthMode: "supported_by_records",
+    seed: 7,
+    id: () => `fixed-id-${++counter}`,
+  });
+  assert.ok(pkg.id.startsWith("fixed-id-"));
+  assert.equal(counter, 1, "id seam called exactly once per case");
+  const a = createDemoCase({
+    topic: "delay_refund",
+    truthMode: "supported_by_records",
+    seed: 7,
+    id: () => "fixed",
+  });
+  const b = createDemoCase({
+    topic: "delay_refund",
+    truthMode: "supported_by_records",
+    seed: 7,
+    id: () => "fixed",
+  });
+  assert.deepEqual(a, b);
+});
+
+test("case factory: unseeded createDemoCase uses globalThis.crypto.randomUUID by default", () => {
+  const original = globalThis.crypto.randomUUID;
+  const calls: string[] = [];
+  globalThis.crypto.randomUUID = () => {
+    calls.push("called");
+    return "00000000-0000-4000-8000-000000000000";
+  };
+  try {
+    const pkg = createDemoCase({
+      topic: "delay_refund",
+      truthMode: "supported_by_records",
+    });
+    assert.ok(
+      calls.length > 0,
+      "expected default id generation via globalThis.crypto.randomUUID",
+    );
+    assert.equal(pkg.id, "00000000-0000-4000-8000-000000000000");
+  } finally {
+    globalThis.crypto.randomUUID = original;
+  }
+});

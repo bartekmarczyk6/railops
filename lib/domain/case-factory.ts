@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type {
   AccountRecord,
   CaseTopic,
@@ -80,7 +79,7 @@ function randomUnseeded(): Random {
     next: Math.random,
     int,
     pick,
-    uuid: () => randomUUID(),
+    uuid: () => globalThis.crypto.randomUUID(),
   };
 }
 
@@ -98,6 +97,7 @@ function buildCase(
   seed: number,
   rng: Random,
   createdAt: string,
+  idGen: () => string,
 ): DemoCasePackage {
   const records: TopicResult = generateForTopic(topic, rng);
   const baseExpected: ExpectedAssertions = buildBaseExpected(records, topic);
@@ -107,7 +107,7 @@ function buildCase(
     records,
   );
   return {
-    id: rng.uuid(),
+    id: idGen(),
     seed,
     topic,
     truthMode,
@@ -125,19 +125,30 @@ export function createDemoCase(input: {
   topic: CaseTopic;
   truthMode: TruthMode;
   seed?: number;
+  id?: () => string;
 }): DemoCasePackage {
   if (input.seed === undefined) {
     const seed = Math.floor(Math.random() * 0x7fffffff);
     const rng = randomUnseeded();
-    return buildCase(input.topic, input.truthMode, seed, rng, new Date().toISOString());
+    const idGen = input.id ?? (() => globalThis.crypto.randomUUID());
+    return buildCase(
+      input.topic,
+      input.truthMode,
+      seed,
+      rng,
+      new Date().toISOString(),
+      idGen,
+    );
   }
   const rng = randomFromSeed(input.seed);
+  const idGen = input.id ?? (() => rng.uuid());
   return buildCase(
     input.topic,
     input.truthMode,
     input.seed,
     rng,
     deterministicCreatedAt(rng),
+    idGen,
   );
 }
 
