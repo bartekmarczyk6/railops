@@ -10,6 +10,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import { StatusPill } from "../beui/atoms/StatusPill.tsx";
 import type { CaseState } from "../../lib/storage/types.ts";
 
 const STATE_LABELS: Record<CaseState, string> = {
@@ -60,7 +61,19 @@ const STATE_ARIA: Record<CaseState, string> = {
   error: "Case pipeline encountered an error",
 };
 
-const ALERT_STATES: ReadonlySet<CaseState> = new Set(["escalated", "error"]);
+type Tone = "green" | "orange" | "red" | "accent" | "neutral";
+
+const STATE_TONES: Record<CaseState, Tone> = {
+  created: "neutral",
+  running: "accent",
+  reviewable: "accent",
+  approved: "green",
+  rejected: "red",
+  escalated: "red",
+  revising: "orange",
+  learning_saved: "green",
+  error: "red",
+};
 
 export type CaseStatusPillProps = {
   state: CaseState;
@@ -74,22 +87,17 @@ export function CaseStatusPill({ state }: CaseStatusPillProps) {
       aria-label={STATE_ARIA[state]}
       data-testid="case-status-pill"
       data-state={state}
-      className={
-        "inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] " +
-        "bg-[color:var(--surface-raised)] px-3 py-1 text-sm " +
-        (ALERT_STATES.has(state)
-          ? "text-[color:var(--error)]"
-          : "text-[color:var(--text)]")
-      }
     >
-      <Icon
-        data-icon={STATE_ICON_NAMES[state]}
-        aria-hidden="true"
-        className={
-          "size-3.5 shrink-0" + (state === "running" ? " motion-safe:animate-spin" : "")
-        }
-      />
-      <span>{STATE_LABELS[state]}</span>
+      <StatusPill tone={STATE_TONES[state]} dot={false}>
+        <Icon
+          data-icon={STATE_ICON_NAMES[state]}
+          aria-hidden="true"
+          className={
+            "size-3.5 shrink-0" + (state === "running" ? " motion-safe:animate-spin" : "")
+          }
+        />
+        <span>{STATE_LABELS[state]}</span>
+      </StatusPill>
     </span>
   );
 }

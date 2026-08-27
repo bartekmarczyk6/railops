@@ -17,9 +17,11 @@ export type ReviewerAlignmentChartProps = {
 const chartConfig = {
   alignment: {
     label: "Alignment",
-    color: "var(--primary)",
+    color: "var(--accent)",
   },
 } satisfies ChartConfig;
+
+const axisTick = { fill: "var(--ink-2)", fontSize: 12 };
 
 export function ReviewerAlignmentChart({ data }: ReviewerAlignmentChartProps) {
   if (data.length === 0) return null;
@@ -36,7 +38,7 @@ export function ReviewerAlignmentChart({ data }: ReviewerAlignmentChartProps) {
           data={[...data]}
           margin={{ top: 12, right: 12, bottom: 0, left: 0 }}
         >
-          <CartesianGrid vertical={false} strokeDasharray="3 3" />
+          <CartesianGrid vertical={false} stroke="var(--line)" />
           <XAxis
             dataKey="caseSeq"
             type="number"
@@ -45,6 +47,7 @@ export function ReviewerAlignmentChart({ data }: ReviewerAlignmentChartProps) {
             tickLine={false}
             axisLine={false}
             tickMargin={8}
+            tick={axisTick}
           />
           <YAxis
             domain={[0, 1]}
@@ -52,6 +55,7 @@ export function ReviewerAlignmentChart({ data }: ReviewerAlignmentChartProps) {
             tickLine={false}
             axisLine={false}
             width={32}
+            tick={axisTick}
             tickFormatter={(value: number) => value.toFixed(1)}
           />
           <ChartTooltip

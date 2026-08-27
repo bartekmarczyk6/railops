@@ -12,6 +12,8 @@ import { POST as createCase, GET as listCases } from "../app/api/cases/route.ts"
 import { GET as getCaseById } from "../app/api/cases/[id]/route.ts";
 import { POST as runCaseStream } from "../app/api/cases/[id]/run/route.ts";
 import { POST as reviewCaseRoute } from "../app/api/cases/[id]/review/route.ts";
+import { POST as rewriteRoute } from "../app/api/cases/[id]/rewrite/route.ts";
+import { runCase as runCaseDirect, type LlmClient } from "../lib/pipeline/run-case.ts";
 import type { StoredCase, TraceEvent } from "../lib/storage/types.ts";
 import type { DecisionDraft } from "../lib/llm/types.ts";
 
@@ -77,11 +79,23 @@ function bodyContainsSecret(body: string): boolean {
   return false;
 }
 
-async function readSseStream(response: Response): Promise<TraceEvent[]> {
+async function readSseStream(response: Response): Promise<{
+  events: TraceEvent[];
+  streamFrames: Array<{ type: "stream"; stage: string; partial: Record<string, unknown> }>;
+}> {
   assert.ok(response.body, "response must have a body");
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   const events: TraceEvent[] = [];
+  const streamFrames: Array<{ type: "stream"; stage: string; partial: Record<string, unknown> }> = [];
+  const pushPayload = (payload: string): void => {
+    const parsed = JSON.parse(payload) as Record<string, unknown>;
+    if (parsed.type === "stream") {
+      streamFrames.push(parsed as unknown as (typeof streamFrames)[number]);
+    } else {
+      events.push(parsed as unknown as TraceEvent);
+    }
+  };
   let buffer = "";
   while (true) {
     const { value, done } = await reader.read();
@@ -95,7 +109,7 @@ async function readSseStream(response: Response): Promise<TraceEvent[]> {
         if (line.startsWith("data:")) {
           const payload = line.slice(5).trim();
           if (payload.length > 0) {
-            events.push(JSON.parse(payload) as TraceEvent);
+            pushPayload(payload);
           }
         }
       }
@@ -107,12 +121,12 @@ async function readSseStream(response: Response): Promise<TraceEvent[]> {
       if (line.startsWith("data:")) {
         const payload = line.slice(5).trim();
         if (payload.length > 0) {
-          events.push(JSON.parse(payload) as TraceEvent);
+          pushPayload(payload);
         }
       }
     }
   }
-  return events;
+  return { events, streamFrames };
 }
 
 async function createCaseRequest(input: {
@@ -137,6 +151,50 @@ async function runRequest(id: string): Promise<Response> {
     makeJsonRequest(`http://localhost/api/cases/${id}/run`, {}) as unknown as Parameters<typeof runCaseStream>[0],
     { params: paramsPromise({ id }) },
   );
+}
+
+async function runRequestWithBody(id: string, body: unknown): Promise<Response> {
+  return runCaseStream(
+    makeJsonRequest(`http://localhost/api/cases/${id}/run`, body) as unknown as Parameters<typeof runCaseStream>[0],
+    { params: paramsPromise({ id }) },
+  );
+}
+
+async function rewriteRequest(id: string, body: unknown): Promise<Response> {
+  return rewriteRoute(
+    makeJsonRequest(`http://localhost/api/cases/${id}/rewrite`, body) as unknown as Parameters<typeof rewriteRoute>[0],
+    { params: paramsPromise({ id }) },
+  );
+}
+
+async function waitForEmail(caseId: string, timeoutMs = 5000): Promise<StoredCase> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const state = await readState({ dataDir: process.env.RAILOPS_DATA_DIR! });
+    const stored = state.cases.find((c) => c.caseId === caseId);
+    if (stored && stored.email !== null) return stored;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`email for case ${caseId} was not prepared within ${timeoutMs}ms`);
+}
+
+function makeFollowUpLlm(): LlmClient {
+  return {
+    generateCustomerEmail: async () => ({
+      subject: "Delay refund request",
+      body: "My train was delayed. Please refund.",
+      mentionedFacts: ["fact:delay"],
+    }),
+    extractCaseClaims: async () => ({
+      requestedAction: "refund",
+      claims: [{ kind: "delay_minutes", description: "Claimed 45 minute delay", value: 45 }],
+      missingFields: ["claimed_delay_minutes"],
+      referencedTicketNumbers: [],
+      referencedStations: [],
+    }),
+    draftDecision: async () => makeDecision(),
+    critiqueDecision: async () => ({ passed: true, findings: [], correctedDraft: null }),
+  };
 }
 
 async function reviewRequest(id: string, body: unknown): Promise<Response> {
@@ -176,6 +234,22 @@ test("POST /api/cases with valid topic+truthMode returns 200 and persists the ca
     assert.equal(created?.truthMode, "supported_by_records");
     assert.equal(created?.state, "created");
     assert.equal(created?.version, 1);
+  });
+});
+
+test("POST /api/cases prepares the passenger email in the background", async () => {
+  await withFreshStore(async () => {
+    const res = await createCaseRequest({ topic: "delay_refund", truthMode: "supported_by_records" });
+    assert.equal(res.status, 200);
+    const { caseId } = (await res.json()) as { caseId: string };
+    const withEmail = await waitForEmail(caseId);
+    assert.ok(withEmail.email, "email must be persisted onto the case");
+    assert.equal(withEmail.email?.from, withEmail.pkg.account.email);
+    assert.equal(typeof withEmail.email?.subject, "string");
+    assert.ok((withEmail.email?.subject ?? "").length > 0);
+    assert.equal(typeof withEmail.email?.body, "string");
+    assert.ok(Array.isArray(withEmail.email?.mentionedFacts));
+    assert.equal(typeof withEmail.email?.receivedAt, "string");
   });
 });
 
@@ -229,15 +303,29 @@ test("POST /api/cases/:id/run returns text/event-stream content-type and stream 
     const res = await runRequest(caseId);
     const contentType = res.headers.get("content-type") ?? "";
     assert.match(contentType, /text\/event-stream/);
-    const events = await readSseStream(res);
+    const { events, streamFrames } = await readSseStream(res);
     assert.ok(events.length > 0, "at least one event should be streamed");
+    assert.equal(events[0]?.stage, "reading_email", "first streamed event must be reading_email");
+    assert.ok(
+      events.some((e) => e.stage === "locating_account"),
+      "locating_account stage must appear in the stream",
+    );
     for (const ev of events) {
       assert.equal(typeof ev.stage, "string");
       assert.equal(typeof ev.status, "string");
       assert.equal(typeof ev.summary, "string");
       assert.equal(typeof ev.id, "string");
     }
-    const text = JSON.stringify(events);
+    assert.ok(streamFrames.length > 0, "at least one token stream frame should be streamed");
+    for (const frame of streamFrames) {
+      assert.equal(frame.type, "stream");
+      assert.ok(
+        frame.stage === "generating_email" || frame.stage === "drafting",
+        `unexpected stream stage: ${frame.stage}`,
+      );
+      assert.ok(frame.partial && typeof frame.partial === "object");
+    }
+    const text = JSON.stringify({ events, streamFrames });
     assert.ok(!bodyContainsSecret(text), "streamed events must not include any secret");
     const state = await readState({ dataDir: process.env.RAILOPS_DATA_DIR! });
     const stored = state.cases.find((c) => c.caseId === caseId);
@@ -395,5 +483,132 @@ test("GET /api/cases/:id response never contains a secret pattern", async () => 
     const res = await getRequest(`http://localhost/api/cases/${caseId}`);
     const text = await res.text();
     assert.ok(!bodyContainsSecret(text), `case response leaked secret: ${text.slice(0, 200)}`);
+  });
+});
+
+test("POST /api/cases/:id/run with answers resumes a follow-up case from evaluating_rules", async () => {
+  await withFreshStore(async () => {
+    const created = await createCaseRequest({ topic: "delay_refund", truthMode: "supported_by_records" });
+    const { caseId } = (await created.json()) as { caseId: string };
+    for await (const _ev of runCaseDirect(caseId, {
+      dataDir: process.env.RAILOPS_DATA_DIR!,
+      runId: "run-followup",
+      llm: makeFollowUpLlm(),
+    })) {
+      void _ev;
+    }
+    const afterRun = await readState({ dataDir: process.env.RAILOPS_DATA_DIR! });
+    const followUpCase = afterRun.cases.find((c) => c.caseId === caseId);
+    assert.equal(followUpCase?.state, "reviewable");
+    const followUpEvent = afterRun.events.find(
+      (e) => e.caseId === caseId && e.stage === "reviewable" && e.status === "completed",
+    );
+    assert.equal(
+      (followUpEvent?.payload as { outcome?: string })?.outcome,
+      "follow_up",
+      "initial run must end in follow_up",
+    );
+
+    const res = await runRequestWithBody(caseId, { answers: { claimed_delay_minutes: "45" } });
+    assert.equal(res.status, 200);
+    const { events } = await readSseStream(res);
+    assert.ok(events.length > 0, "resume must stream events");
+    assert.equal(events[0]?.stage, "evaluating_rules", "resume stream starts at evaluating_rules");
+    assert.ok(
+      events.some((e) => e.stage === "drafting" && e.status === "completed"),
+      "resume must draft a decision",
+    );
+    const last = events[events.length - 1];
+    assert.equal(last?.stage, "reviewable");
+    assert.equal(last?.status, "completed");
+    assert.equal(
+      (last?.payload as { outcome?: string })?.outcome,
+      "reviewable",
+      "supplemented answers clear the follow-up",
+    );
+    const after = await readState({ dataDir: process.env.RAILOPS_DATA_DIR! });
+    const resumed = after.cases.find((c) => c.caseId === caseId);
+    assert.equal(resumed?.state, "reviewable");
+    assert.deepEqual(resumed?.supplements, { claimed_delay_minutes: "45" });
+    const text = JSON.stringify(events);
+    assert.ok(!bodyContainsSecret(text), "resume events must not include any secret");
+  });
+});
+
+test("POST /api/cases/:id/run with empty answers object resumes a follow-up case", async () => {
+  await withFreshStore(async () => {
+    const created = await createCaseRequest({ topic: "delay_refund", truthMode: "supported_by_records" });
+    const { caseId } = (await created.json()) as { caseId: string };
+    for await (const _ev of runCaseDirect(caseId, {
+      dataDir: process.env.RAILOPS_DATA_DIR!,
+      runId: "run-followup",
+      llm: makeFollowUpLlm(),
+    })) {
+      void _ev;
+    }
+    const res = await runRequestWithBody(caseId, { answers: {} });
+    assert.equal(res.status, 200);
+    const { events } = await readSseStream(res);
+    assert.ok(events.length > 0, "resume must stream events");
+    assert.equal(events[0]?.stage, "evaluating_rules", "resume stream starts at evaluating_rules");
+    const last = events[events.length - 1];
+    assert.equal(last?.stage, "reviewable");
+    assert.equal(last?.status, "completed");
+    assert.equal(
+      (last?.payload as { outcome?: string })?.outcome,
+      "follow_up",
+      "unanswered fields return the case to follow-up",
+    );
+  });
+});
+
+test("POST /api/cases/:id/run with invalid answers shape returns 400 invalid_input", async () => {
+  await withFreshStore(async () => {
+    const created = await createCaseRequest({ topic: "delay_refund", truthMode: "supported_by_records" });
+    const { caseId } = (await created.json()) as { caseId: string };
+    const notObject = await runRequestWithBody(caseId, { answers: "yes" });
+    assert.equal(notObject.status, 400);
+    const badValue = await runRequestWithBody(caseId, { answers: { field: 42 } });
+    assert.equal(badValue.status, 400);
+  });
+});
+
+test("POST /api/cases/:id/rewrite returns the rewritten selection", async () => {
+  await withFreshStore(async () => {
+    const created = await createCaseRequest({ topic: "delay_refund", truthMode: "supported_by_records" });
+    const { caseId } = (await created.json()) as { caseId: string };
+    const res = await rewriteRequest(caseId, {
+      selection: "the refund amount",
+      instruction: "Shorten",
+      response: "We reviewed your request and approved the refund amount.",
+    });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { rewritten?: string };
+    assert.equal(typeof body.rewritten, "string");
+    assert.ok(body.rewritten!.includes("Shorten"), "fake rewrite echoes the instruction");
+    assert.ok(body.rewritten!.includes("the refund amount"), "fake rewrite echoes the selection");
+    const text = JSON.stringify(body);
+    assert.ok(!bodyContainsSecret(text), "rewrite response must not include any secret");
+  });
+});
+
+test("POST /api/cases/:id/rewrite on missing case returns 404", async () => {
+  await withFreshStore(async () => {
+    const res = await rewriteRequest("nope", {
+      selection: "x",
+      instruction: "y",
+      response: "z",
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("POST /api/cases/:id/rewrite with missing fields returns 400 invalid_input", async () => {
+  await withFreshStore(async () => {
+    const created = await createCaseRequest({ topic: "delay_refund", truthMode: "supported_by_records" });
+    const { caseId } = (await created.json()) as { caseId: string };
+    const res = await rewriteRequest(caseId, { selection: "", instruction: "Shorten", response: "text" });
+    assert.equal(res.status, 400);
+    assert.equal(((await res.json()) as { error?: string }).error, "invalid_input");
   });
 });

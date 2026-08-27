@@ -1,0 +1,183 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { TraceEvent } from "@/lib/storage/types.ts";
+
+export type CaseRunStatus = "idle" | "running" | "done" | "error";
+
+export type CaseRunBody = { answers: Record<string, string> };
+
+export type CaseRunState = {
+  status: CaseRunStatus;
+  events: TraceEvent[];
+  emailPartial: { subject?: string; body?: string } | null;
+  draftPartial: { response?: string; outcome?: string; proposedAmount?: number | null } | null;
+  error: string | null;
+};
+
+type StreamFrame = {
+  type: "stream";
+  stage: "generating_email" | "drafting";
+  partial: Record<string, unknown>;
+};
+
+const INITIAL_STATE: CaseRunState = {
+  status: "idle",
+  events: [],
+  emailPartial: null,
+  draftPartial: null,
+  error: null,
+};
+
+function isTraceEvent(value: unknown): value is TraceEvent {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.id === "string" &&
+    typeof v.stage === "string" &&
+    typeof v.status === "string" &&
+    !("type" in v)
+  );
+}
+
+export function buildRunRequest(
+  caseId: string,
+  body?: CaseRunBody,
+): { url: string; init: RequestInit } {
+  const url = `/api/cases/${caseId}/run`;
+  if (body === undefined) return { url, init: { method: "POST" } };
+  return {
+    url,
+    init: {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  };
+}
+
+export function useCaseRun(
+  caseId: string,
+  live: boolean,
+): CaseRunState & { start: (body?: CaseRunBody) => void } {
+  const [state, setState] = useState<CaseRunState>(INITIAL_STATE);
+  const runningRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const start = useCallback((body?: CaseRunBody) => {
+    if (runningRef.current) return;
+    runningRef.current = true;
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setState({ ...INITIAL_STATE, status: "running" });
+
+    const applyFrame = (frame: string): void => {
+      const dataLines = frame
+        .split("\n")
+        .filter((line) => line.startsWith("data: "))
+        .map((line) => line.slice("data: ".length));
+      if (dataLines.length === 0) return;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(dataLines.join("\n"));
+      } catch {
+        return;
+      }
+      if (typeof parsed !== "object" || parsed === null) return;
+      const value = parsed as Record<string, unknown>;
+      if (value.type === "stream") {
+        const stream = parsed as StreamFrame;
+        setState((s) => {
+          if (stream.stage === "generating_email") {
+            return { ...s, emailPartial: { ...s.emailPartial, ...stream.partial } };
+          }
+          if (stream.stage === "drafting") {
+            return { ...s, draftPartial: { ...s.draftPartial, ...stream.partial } };
+          }
+          return s;
+        });
+        return;
+      }
+      if (!isTraceEvent(parsed)) return;
+      const event = parsed;
+      setState((s) => {
+        const events = s.events.some((e) => e.id === event.id)
+          ? s.events.map((e) => (e.id === event.id ? event : e))
+          : [...s.events, event];
+        const next: CaseRunState = { ...s, events };
+        if (event.status === "failed" && s.status === "running") {
+          next.status = "error";
+          next.error = event.error ?? event.summary;
+        }
+        return next;
+      });
+    };
+
+    void (async () => {
+      const { url, init } = buildRunRequest(caseId, body);
+      let response: Response;
+      try {
+        response = await fetch(url, { ...init, signal: controller.signal });
+      } catch (err) {
+        runningRef.current = false;
+        if (controller.signal.aborted) return;
+        setState((s) => ({
+          ...s,
+          status: "error",
+          error: err instanceof Error ? err.message : String(err),
+        }));
+        return;
+      }
+      if (!response.ok || !response.body) {
+        runningRef.current = false;
+        setState((s) => ({
+          ...s,
+          status: "error",
+          error: `Run failed with HTTP ${response.status}`,
+        }));
+        return;
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      try {
+        for (;;) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          buffer += decoder.decode(chunk.value, { stream: true });
+          let separator = buffer.indexOf("\n\n");
+          while (separator >= 0) {
+            const frame = buffer.slice(0, separator);
+            buffer = buffer.slice(separator + 2);
+            applyFrame(frame);
+            separator = buffer.indexOf("\n\n");
+          }
+        }
+        runningRef.current = false;
+        setState((s) => (s.status === "running" ? { ...s, status: "done" } : s));
+      } catch (err) {
+        runningRef.current = false;
+        if (controller.signal.aborted) return;
+        setState((s) => ({
+          ...s,
+          status: "error",
+          error: err instanceof Error ? err.message : String(err),
+        }));
+      }
+    })();
+  }, [caseId]);
+
+  useEffect(() => {
+    if (!live) return;
+    const timer = window.setTimeout(() => start(), 0);
+    return () => {
+      window.clearTimeout(timer);
+      abortRef.current?.abort();
+      abortRef.current = null;
+      runningRef.current = false;
+    };
+  }, [live, start]);
+
+  return { ...state, start };
+}

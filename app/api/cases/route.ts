@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { createDemoCase } from "../../../lib/domain/case-factory.ts";
 import { readState, updateState } from "../../../lib/storage/store.ts";
 import type { CaseState, StoredCase } from "../../../lib/storage/types.ts";
+import { prepareCaseEmail } from "../../../lib/pipeline/email-prep.ts";
 import { isCaseTopic, isTruthMode } from "../_shared/validation.ts";
 import { getDataDir } from "../_shared/data-dir.ts";
 
@@ -64,6 +65,7 @@ export async function POST(request: Request): Promise<Response> {
   }
   const pkg = createDemoCase({ topic, truthMode });
   const now = new Date().toISOString();
+  const dataDir = getDataDir();
   const stored: StoredCase = {
     caseId: pkg.id,
     topic,
@@ -76,9 +78,13 @@ export async function POST(request: Request): Promise<Response> {
     trace: [],
     reviewHistory: [],
     learningRef: null,
+    email: null,
+    emailError: null,
+    supplements: {},
     version: 1,
   };
-  await updateState((s) => ({ ...s, cases: [...s.cases, stored] }), { dataDir: getDataDir() });
+  await updateState((s) => ({ ...s, cases: [...s.cases, stored] }), { dataDir });
+  void prepareCaseEmail(stored.caseId, { dataDir }).catch(() => {});
   return NextResponse.json({ caseId: stored.caseId });
 }
 

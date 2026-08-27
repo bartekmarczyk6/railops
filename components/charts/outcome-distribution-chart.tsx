@@ -1,8 +1,7 @@
 "use client";
 
-import { motion, useReducedMotion } from "motion/react";
 import { SVGProps } from "react";
-import { Bar, BarChart, XAxis } from "recharts";
+import { Bar, BarChart, Cell, XAxis } from "recharts";
 
 import {
   ChartContainer,
@@ -22,7 +21,11 @@ const LABELS: Record<string, string> = {
   draft: "Draft",
 };
 
-const COLLAPSED_WIDTH = 6;
+const COLORS: Record<string, string> = {
+  refund: "var(--green)",
+  denied: "var(--red)",
+  draft: "var(--ink-2)",
+};
 
 interface OutcomeBarProps extends SVGProps<SVGSVGElement> {
   index?: number;
@@ -30,54 +33,23 @@ interface OutcomeBarProps extends SVGProps<SVGSVGElement> {
 }
 
 function OutcomeBar(props: OutcomeBarProps) {
-  const reduce = useReducedMotion();
   const { fill, x, y, width, height, value } = props;
   const xPos = Number(x ?? 0);
   const barWidth = Number(width ?? 0);
   const textX = xPos + barWidth / 2;
 
-  if (reduce) {
-    return (
-      <g>
-        <rect x={xPos} y={y} width={barWidth} height={height} fill={fill} rx="3" />
-        <text
-          x={textX}
-          y={Number(y) - 6}
-          textAnchor="middle"
-          fontSize={12}
-          fill="var(--color-count)"
-        >
-          {value}
-        </text>
-      </g>
-    );
-  }
-
   return (
     <g>
-      <motion.rect
-        style={{ willChange: "transform, width" }}
-        y={y}
-        initial={{ width: COLLAPSED_WIDTH, x: xPos + (barWidth - COLLAPSED_WIDTH) / 2 }}
-        animate={{ width: barWidth, x: xPos }}
-        transition={{ duration: 0.6, type: "spring" }}
-        height={height}
-        fill={fill}
-        rx="3"
-      />
-      <motion.text
-        style={{ willChange: "opacity" }}
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 0.2, delay: 0.45 }}
+      <rect x={xPos} y={y} width={barWidth} height={height} fill={fill} rx="3" />
+      <text
         x={textX}
         y={Number(y) - 6}
         textAnchor="middle"
         fontSize={12}
-        fill="var(--color-count)"
+        fill="var(--ink-2)"
       >
         {value}
-      </motion.text>
+      </text>
     </g>
   );
 }
@@ -85,7 +57,7 @@ function OutcomeBar(props: OutcomeBarProps) {
 const chartConfig = {
   count: {
     label: "Cases",
-    color: "var(--primary)",
+    color: "var(--accent)",
   },
 } satisfies ChartConfig;
 
@@ -114,16 +86,17 @@ export function OutcomeDistributionChart({ data }: OutcomeDistributionChartProps
             tickLine={false}
             axisLine={false}
             tickMargin={10}
+            tick={{ fill: "var(--ink-2)", fontSize: 12 }}
           />
           <ChartTooltip
             cursor={false}
             content={<ChartTooltipContent indicator="dot" />}
           />
-          <Bar
-            dataKey="count"
-            fill="var(--color-count)"
-            shape={<OutcomeBar />}
-          />
+          <Bar dataKey="count" shape={<OutcomeBar />}>
+            {data.map((d) => (
+              <Cell key={d.outcome} fill={COLORS[d.outcome] ?? "var(--accent)"} />
+            ))}
+          </Bar>
         </BarChart>
       </ChartContainer>
       <table className="sr-only">
@@ -137,9 +110,7 @@ export function OutcomeDistributionChart({ data }: OutcomeDistributionChartProps
         <tbody>
           {data.map((d) => (
             <tr key={d.outcome}>
-              <th scope="row">
-                {d.outcome} ({LABELS[d.outcome] ?? d.outcome})
-              </th>
+              <th scope="row">{LABELS[d.outcome] ?? d.outcome}</th>
               <td>{d.count}</td>
             </tr>
           ))}

@@ -6,6 +6,7 @@ import type {
   AppState,
   CaseState,
   StoredCase,
+  StoredEmail,
   TraceEvent,
 } from "../storage/types.ts";
 import { evaluateCase } from "../rules/evaluate.ts";
@@ -19,18 +20,24 @@ import {
   extractCaseClaims,
   draftDecision,
   critiqueDecision,
+  streamGenerateCustomerEmail,
+  streamDraftDecision,
+  rewriteResponseText,
   type GenerateEmailInput,
   type ExtractClaimsInput,
   type DraftDecisionInput,
   type CritiqueDecisionInput,
+  type RewriteTextInput,
 } from "../llm/baml.ts";
 import type {
+  Claim,
   EmailDraft,
   ExtractedClaims,
   DecisionDraft,
   CritiqueReport,
 } from "../llm/types.ts";
 
+import { awaitCaseEmail } from "./email-prep.ts";
 import { createEvent, sameRunEvents } from "./events.ts";
 
 export const DEFAULT_DATA_DIR = ".railops/data";
@@ -63,6 +70,20 @@ export class ReviewError extends Error {
   }
 }
 
+export type EmailStreamPartial = { subject?: string; body?: string };
+
+export type DecisionStreamPartial = {
+  response?: string;
+  outcome?: string;
+  proposedAmount?: number | null;
+};
+
+export type StreamFrame = {
+  type: "stream";
+  stage: "generating_email" | "drafting";
+  partial: Record<string, unknown>;
+};
+
 export type LlmClient = {
   generateCustomerEmail(
     input: GenerateEmailInput,
@@ -80,6 +101,20 @@ export type LlmClient = {
     input: CritiqueDecisionInput,
     signal?: AbortSignal,
   ): Promise<CritiqueReport>;
+  rewriteResponseText?(
+    input: RewriteTextInput,
+    signal?: AbortSignal,
+  ): Promise<{ rewrittenSelection: string }>;
+  streamGenerateCustomerEmail?(
+    input: GenerateEmailInput,
+    onPartial: (partial: EmailStreamPartial) => void,
+    signal?: AbortSignal,
+  ): Promise<EmailDraft>;
+  streamDraftDecision?(
+    input: DraftDecisionInput,
+    onPartial: (partial: DecisionStreamPartial) => void,
+    signal?: AbortSignal,
+  ): Promise<DecisionDraft>;
 };
 
 const defaultLlm: LlmClient = {
@@ -87,6 +122,11 @@ const defaultLlm: LlmClient = {
   extractCaseClaims: (input, signal) => extractCaseClaims(input, signal),
   draftDecision: (input, signal) => draftDecision(input, signal),
   critiqueDecision: (input, signal) => critiqueDecision(input, signal),
+  rewriteResponseText: (input, signal) => rewriteResponseText(input, signal),
+  streamGenerateCustomerEmail: (input, onPartial, signal) =>
+    streamGenerateCustomerEmail(input, onPartial, signal),
+  streamDraftDecision: (input, onPartial, signal) =>
+    streamDraftDecision(input, onPartial, signal),
 };
 
 export type RunCaseOptions = {
@@ -96,6 +136,7 @@ export type RunCaseOptions = {
   indexPath?: string;
   llm?: LlmClient;
   memoryClient?: Parameters<typeof recallReviewerContext>[0]["client"];
+  onStream?: (frame: StreamFrame) => void;
 };
 
 type RunContext = {
@@ -106,10 +147,12 @@ type RunContext = {
   indexPath: string;
   llm: LlmClient;
   memoryClient: RunCaseOptions["memoryClient"];
+  onStream: RunCaseOptions["onStream"];
   events: TraceEvent[];
   nextSeq: number;
   casePkg: StoredCase["pkg"];
   bamlCalls: number;
+  storedEmail: StoredEmail | null;
   emailDraft: EmailDraft | null;
   claims: ExtractedClaims | null;
   rules: RuleEvaluation | null;
@@ -117,6 +160,7 @@ type RunContext = {
   recordRefs: string[];
   decisionDraft: DecisionDraft | null;
   reviseCount: number;
+  supplements: Record<string, string>;
 };
 
 function ensureRunId(runId?: string): string {
@@ -164,6 +208,31 @@ function claimsForRules(claims: ExtractedClaims): RulesExtractedClaims {
     referencedTicketNumbers: claims.referencedTicketNumbers,
     referencedStations: claims.referencedStations,
   };
+}
+
+function applySupplements(
+  claims: ExtractedClaims,
+  supplements: Record<string, string>,
+): ExtractedClaims {
+  const missingFields = [...claims.missingFields];
+  const nextClaims = [...claims.claims];
+  for (const [field, value] of Object.entries(supplements)) {
+    const idx = missingFields.indexOf(field);
+    if (idx === -1) continue;
+    missingFields.splice(idx, 1);
+    const trimmed = value.trim();
+    const numeric =
+      trimmed.length > 0 && Number.isFinite(Number(trimmed)) ? Number(trimmed) : null;
+    const claim: Claim = {
+      kind: field,
+      description: `${field}: ${value}`,
+      value: numeric,
+    };
+    const existingIdx = nextClaims.findIndex((c) => c.kind === field);
+    if (existingIdx >= 0) nextClaims[existingIdx] = claim;
+    else nextClaims.push(claim);
+  }
+  return { ...claims, claims: nextClaims, missingFields };
 }
 
 async function record(
@@ -220,42 +289,34 @@ async function finalizeCase(
   });
 }
 
-async function generateEmail(
+async function readEmailStage(
   ctx: RunContext,
 ): Promise<{ ok: boolean; events: TraceEvent[] }> {
   if (checkAbort(ctx.signal)) {
-    const ev = await record(ctx, "generating_email", "failed", "Run aborted", { error: "aborted" });
+    const ev = await record(ctx, "reading_email", "failed", "Run aborted", { error: "aborted" });
     return { ok: false, events: [ev] };
   }
   const startedAt = Date.now();
-  const started = await record(ctx, "generating_email", "started", "Generate customer email for case", {
-    functionName: "GenerateCustomerEmail",
-    recordRefs: ctx.recordRefs,
+  const started = await record(ctx, "reading_email", "started", "Read the passenger's email", {
+    functionName: "awaitCaseEmail",
   });
   try {
-    const pkg = ctx.casePkg;
-    const input: GenerateEmailInput = {
-      casePackageJson: JSON.stringify(pkg),
-      topic: pkg.topic,
-      truthMode: pkg.truthMode,
-      claimsJson: JSON.stringify(ctx.claims ?? {}),
-      rulesJson: JSON.stringify(ctx.rules ?? {}),
-      knowledgeJson: JSON.stringify(ctx.knowledge),
-      memoryJson: JSON.stringify({ source: "none", reviewerGuidance: [] }),
+    const email = await awaitCaseEmail(ctx.caseId, { dataDir: ctx.dataDir, llm: ctx.llm });
+    ctx.storedEmail = email;
+    ctx.emailDraft = {
+      subject: email.subject,
+      body: email.body,
+      mentionedFacts: email.mentionedFacts,
     };
-    const email = await ctx.llm.generateCustomerEmail(input, ctx.signal);
-    ctx.bamlCalls += 1;
-    ctx.emailDraft = email;
     const dur = Date.now() - startedAt;
     const completed = await record(
       ctx,
-      "generating_email",
+      "reading_email",
       "completed",
-      `Email draft generated: ${email.subject}`,
+      `Email from ${email.from}: ${email.subject}`,
       {
-        functionName: "GenerateCustomerEmail",
-        recordRefs: ctx.recordRefs,
-        payload: { subject: email.subject, mentionedFacts: email.mentionedFacts },
+        functionName: "awaitCaseEmail",
+        payload: email,
         durationMs: dur,
       },
     );
@@ -263,13 +324,61 @@ async function generateEmail(
   } catch (err) {
     const dur = Date.now() - startedAt;
     const message = err instanceof Error ? err.message : String(err);
-    const failed = await record(ctx, "generating_email", "failed", `Email generation failed: ${message}`, {
-      functionName: "GenerateCustomerEmail",
+    const failed = await record(ctx, "reading_email", "failed", `Reading email failed: ${message}`, {
+      functionName: "awaitCaseEmail",
       error: message,
       durationMs: dur,
     });
     return { ok: false, events: [started, failed] };
   }
+}
+
+async function locateAccountStage(
+  ctx: RunContext,
+): Promise<{ ok: boolean; events: TraceEvent[] }> {
+  if (checkAbort(ctx.signal)) {
+    const ev = await record(ctx, "locating_account", "failed", "Run aborted", { error: "aborted" });
+    return { ok: false, events: [ev] };
+  }
+  const startedAt = Date.now();
+  const started = await record(ctx, "locating_account", "started", "Find the passenger by email", {
+    functionName: "locateAccount",
+  });
+  const email = ctx.storedEmail;
+  if (!email) {
+    const failed = await record(ctx, "locating_account", "failed", "No email stored for case", {
+      functionName: "locateAccount",
+      error: "no_email",
+    });
+    return { ok: false, events: [started, failed] };
+  }
+  const pkg = ctx.casePkg;
+  const matchedByEmail = pkg.account.email === email.from;
+  const ticketIds = pkg.tickets
+    .filter(
+      (t) => email.body.includes(t.id) || email.mentionedFacts.includes(`record:ticket:${t.id}`),
+    )
+    .map((t) => t.id);
+  const recordRefs = [
+    ...ticketIds.map((id) => `record:ticket:${id}`),
+    `record:route:${pkg.route.id}`,
+  ];
+  const dur = Date.now() - startedAt;
+  const summary = `Matched ${pkg.account.fullName} <${pkg.account.email}>${
+    ticketIds.length > 0 ? ` · ${ticketIds.length} ticket(s)` : ""
+  }`;
+  const completed = await record(ctx, "locating_account", "completed", summary, {
+    functionName: "locateAccount",
+    recordRefs,
+    payload: {
+      accountId: pkg.account.id,
+      accountName: pkg.account.fullName,
+      matchedByEmail,
+      ticketIds,
+    },
+    durationMs: dur,
+  });
+  return { ok: true, events: [started, completed] };
 }
 
 async function extractClaims(
@@ -319,76 +428,87 @@ async function extractClaims(
   }
 }
 
-async function retrieveAndCheck(
+async function retrieveKnowledgeStage(
   ctx: RunContext,
 ): Promise<{ ok: boolean; events: TraceEvent[] }> {
-  const events: TraceEvent[] = [];
   if (checkAbort(ctx.signal)) {
     const ev = await record(ctx, "retrieving_knowledge", "failed", "Run aborted", { error: "aborted" });
-    events.push(ev);
-    const ev2 = await record(ctx, "checking_records", "failed", "Run aborted", { error: "aborted" });
-    events.push(ev2);
-    return { ok: false, events };
+    return { ok: false, events: [ev] };
   }
-  const rkStart = await record(
+  const startedAt = Date.now();
+  const started = await record(
     ctx,
     "retrieving_knowledge",
     "started",
     "Search knowledge base for relevant passages",
     { functionName: "searchKnowledge" },
   );
-  events.push(rkStart);
-  const crStart = await record(
-    ctx,
-    "checking_records",
-    "started",
-    "Inspect synthetic records for evidence references",
-    { functionName: "collectRecordRefs" },
-  );
-  events.push(crStart);
   try {
-    const kStart = Date.now();
+    if (checkAbort(ctx.signal)) {
+      throw new PipelineError("aborted", "aborted before knowledge search");
+    }
     const terms = [
       ctx.casePkg.topic,
       ctx.casePkg.truthMode,
       ctx.emailDraft?.subject ?? "",
       ...(ctx.claims?.claims.map((c) => c.kind) ?? []),
     ].filter((t) => t.length > 0);
-    const [knowledge, recordRefs] = await Promise.all([
-      Promise.resolve().then(() => {
-        if (checkAbort(ctx.signal)) {
-          throw new PipelineError("aborted", "aborted before knowledge search");
-        }
-        return searchKnowledge(
-          { topic: ctx.casePkg.topic, terms, limit: 5 },
-          ctx.indexPath,
-        );
-      }),
-      Promise.resolve().then(() => {
-        if (checkAbort(ctx.signal)) {
-          throw new PipelineError("aborted", "aborted before record check");
-        }
-        return recordRefsForPkg(ctx.casePkg);
-      }),
-    ]);
+    const knowledge = searchKnowledge(
+      { topic: ctx.casePkg.topic, terms, limit: 5 },
+      ctx.indexPath,
+    );
     ctx.knowledge = knowledge;
-    ctx.recordRefs = mergeUniqueStrings(ctx.recordRefs, recordRefs);
-    const knowledgeRefs = knowledgeEvidenceRefs(knowledge);
-    const dur = Date.now() - kStart;
-    const rkDone = await record(
+    const dur = Date.now() - startedAt;
+    const completed = await record(
       ctx,
       "retrieving_knowledge",
       "completed",
       `Retrieved ${knowledge.length} knowledge excerpts`,
       {
         functionName: "searchKnowledge",
-        evidenceRefs: knowledgeRefs,
+        evidenceRefs: knowledgeEvidenceRefs(knowledge),
         payload: { count: knowledge.length, ids: knowledge.map((k) => k.id) },
         durationMs: dur,
       },
     );
-    events.push(rkDone);
-    const crDone = await record(
+    return { ok: true, events: [started, completed] };
+  } catch (err) {
+    const dur = Date.now() - startedAt;
+    const message = err instanceof Error ? err.message : String(err);
+    const failed = await record(
+      ctx,
+      "retrieving_knowledge",
+      "failed",
+      `Knowledge retrieval failed: ${message}`,
+      { functionName: "searchKnowledge", error: message, durationMs: dur },
+    );
+    return { ok: false, events: [started, failed] };
+  }
+}
+
+async function checkRecordsStage(
+  ctx: RunContext,
+): Promise<{ ok: boolean; events: TraceEvent[] }> {
+  if (checkAbort(ctx.signal)) {
+    const ev = await record(ctx, "checking_records", "failed", "Run aborted", { error: "aborted" });
+    return { ok: false, events: [ev] };
+  }
+  const startedAt = Date.now();
+  const started = await record(
+    ctx,
+    "checking_records",
+    "started",
+    "Inspect synthetic records for evidence references",
+    { functionName: "collectRecordRefs" },
+  );
+  try {
+    if (checkAbort(ctx.signal)) {
+      throw new PipelineError("aborted", "aborted before record check");
+    }
+    const recordRefs = recordRefsForPkg(ctx.casePkg);
+    ctx.recordRefs = mergeUniqueStrings(ctx.recordRefs, recordRefs);
+    const dur = Date.now() - startedAt;
+    const completed = await record(
       ctx,
       "checking_records",
       "completed",
@@ -399,27 +519,18 @@ async function retrieveAndCheck(
         durationMs: dur,
       },
     );
-    events.push(crDone);
-    return { ok: true, events };
+    return { ok: true, events: [started, completed] };
   } catch (err) {
+    const dur = Date.now() - startedAt;
     const message = err instanceof Error ? err.message : String(err);
-    const rkFail = await record(
-      ctx,
-      "retrieving_knowledge",
-      "failed",
-      `Knowledge retrieval failed: ${message}`,
-      { functionName: "searchKnowledge", error: message },
-    );
-    events.push(rkFail);
-    const crFail = await record(
+    const failed = await record(
       ctx,
       "checking_records",
       "failed",
       `Record check failed: ${message}`,
-      { functionName: "collectRecordRefs", error: message },
+      { functionName: "collectRecordRefs", error: message, durationMs: dur },
     );
-    events.push(crFail);
-    return { ok: false, events };
+    return { ok: false, events: [started, failed] };
   }
 }
 
@@ -441,6 +552,7 @@ async function evaluateRules(
     functionName: "evaluateCase",
   });
   try {
+    ctx.claims = applySupplements(ctx.claims, ctx.supplements);
     const rules = evaluateCase({ pkg: ctx.casePkg, claims: claimsForRules(ctx.claims) });
     ctx.rules = rules;
     const dur = Date.now() - startedAt;
@@ -500,17 +612,28 @@ async function draftDecisionStage(
       memoryJson: JSON.stringify(memoryContext),
     };
     let draft: DecisionDraft;
+    const onDraftPartial = (partial: DecisionStreamPartial): void => {
+      ctx.onStream?.({
+        type: "stream",
+        stage: "drafting",
+        partial: { ...partial },
+      });
+    };
     if (isRevision && criticFindings.length > 0) {
       const findingsJson = JSON.stringify(criticFindings);
       const revised: DraftDecisionInput = {
         ...baseInput,
         rulesJson: `${baseInput.rulesJson}\n## Critic findings\n${findingsJson}`,
       };
-      draft = await ctx.llm.draftDecision(revised, ctx.signal);
+      draft = ctx.llm.streamDraftDecision
+        ? await ctx.llm.streamDraftDecision(revised, onDraftPartial, ctx.signal)
+        : await ctx.llm.draftDecision(revised, ctx.signal);
       ctx.bamlCalls += 1;
       ctx.reviseCount += 1;
     } else {
-      draft = await ctx.llm.draftDecision(baseInput, ctx.signal);
+      draft = ctx.llm.streamDraftDecision
+        ? await ctx.llm.streamDraftDecision(baseInput, onDraftPartial, ctx.signal)
+        : await ctx.llm.draftDecision(baseInput, ctx.signal);
       ctx.bamlCalls += 1;
     }
     ctx.decisionDraft = draft;
@@ -610,15 +733,145 @@ async function emitReviewable(
   });
 }
 
+async function* decisionTail(
+  ctx: RunContext,
+  version: number,
+): AsyncGenerator<TraceEvent> {
+  const rules = await evaluateRules(ctx);
+  for (const e of rules.events) yield e;
+  if (!rules.ok) {
+    await finalizeCase(ctx, "error", version);
+    return;
+  }
+
+  const memoryContext: MemoryContext = await recallReviewerContext({
+    topic: ctx.casePkg.topic,
+    query: `${ctx.casePkg.topic} ${ctx.claims?.requestedAction ?? ""}`.trim(),
+    client: ctx.memoryClient ?? null,
+  });
+
+  const shortCircuit =
+    (ctx.claims && ctx.claims.missingFields.length > 0) ||
+    ctx.rules?.outcome === "follow_up_required";
+  if (shortCircuit) {
+    const summary =
+      ctx.claims && ctx.claims.missingFields.length > 0
+        ? `Follow-up required: ${ctx.claims.missingFields.join(", ")}`
+        : "Follow-up required by deterministic rules";
+    const ev = await emitReviewable(ctx, "completed", summary, "follow_up");
+    yield ev;
+    await finalizeCase(ctx, "reviewable", version);
+    return;
+  }
+
+  if (ctx.rules?.outcome === "escalate") {
+    const ev = await emitReviewable(ctx, "completed", "Escalation recommended by deterministic rules", "escalate");
+    yield ev;
+    await finalizeCase(ctx, "escalated", version);
+    return;
+  }
+
+  const draft1 = await draftDecisionStage(ctx, memoryContext, false, []);
+  for (const e of draft1.events) yield e;
+  if (!draft1.ok) {
+    await finalizeCase(ctx, "error", version);
+    return;
+  }
+
+  if (checkAbort(ctx.signal)) {
+    const ev = await emitReviewable(ctx, "failed", "Run aborted", "error", { error: "aborted" });
+    yield ev;
+    await finalizeCase(ctx, "error", version);
+    return;
+  }
+
+  const critique1 = await critiqueStage(ctx);
+  for (const e of critique1.events) yield e;
+  if (!critique1.ok) {
+    await finalizeCase(ctx, "error", version);
+    return;
+  }
+
+  let finalReport = critique1.report;
+  if (finalReport && !finalReport.passed) {
+    const findings = finalReport.findings.map((f) => ({
+      severity: f.severity,
+      message: f.message,
+      evidenceRef: f.evidenceRef ?? null,
+    }));
+    const draft2 = await draftDecisionStage(ctx, memoryContext, true, findings);
+    for (const e of draft2.events) yield e;
+    if (!draft2.ok) {
+      await finalizeCase(ctx, "error", version);
+      return;
+    }
+    if (checkAbort(ctx.signal)) {
+      const ev = await emitReviewable(ctx, "failed", "Run aborted", "error", { error: "aborted" });
+      yield ev;
+      await finalizeCase(ctx, "error", version);
+      return;
+    }
+    const critique2 = await critiqueStage(ctx);
+    for (const e of critique2.events) yield e;
+    if (!critique2.ok) {
+      await finalizeCase(ctx, "error", version);
+      return;
+    }
+    finalReport = critique2.report;
+    if (finalReport && !finalReport.passed) {
+      const ev = await emitReviewable(ctx, "completed", "Critic failed twice; escalating", "escalate");
+      yield ev;
+      await finalizeCase(ctx, "escalated", version);
+      return;
+    }
+  }
+
+  const ev = await emitReviewable(ctx, "completed", "Decision ready for review", "reviewable");
+  yield ev;
+  await finalizeCase(ctx, "reviewable", version);
+}
+
+function buildContext(
+  caseId: string,
+  existing: StoredCase,
+  runId: string,
+  startSeq: number,
+  options: RunCaseOptions,
+  dataDir: string,
+  llm: LlmClient,
+): RunContext {
+  return {
+    caseId,
+    runId,
+    signal: options.signal,
+    dataDir,
+    indexPath: options.indexPath ?? DEFAULT_KNOWLEDGE_INDEX,
+    llm,
+    memoryClient: options.memoryClient,
+    onStream: options.onStream,
+    events: [],
+    nextSeq: startSeq,
+    casePkg: existing.pkg,
+    bamlCalls: 0,
+    storedEmail: null,
+    emailDraft: null,
+    claims: null,
+    rules: null,
+    knowledge: [],
+    recordRefs: [],
+    decisionDraft: null,
+    reviseCount: 0,
+    supplements: { ...(existing.supplements ?? {}) },
+  };
+}
+
 export async function* runCase(
   caseId: string,
   options: RunCaseOptions = {},
 ): AsyncGenerator<TraceEvent> {
   const dataDir = resolve(options.dataDir ?? DEFAULT_DATA_DIR);
-  const indexPath = options.indexPath ?? DEFAULT_KNOWLEDGE_INDEX;
   const llm: LlmClient = options.llm ?? defaultLlm;
   const runId = ensureRunId(options.runId);
-  const signal = options.signal;
 
   const state = await readState({ dataDir });
   const existing = state.cases.find((c) => c.caseId === caseId);
@@ -635,26 +888,7 @@ export async function* runCase(
   const allCaseEvents = state.events.filter((e) => e.caseId === caseId);
   const startSeq = allCaseEvents.reduce((m, e) => (e.sequence > m ? e.sequence : m), 0) + 1;
 
-  const ctx: RunContext = {
-    caseId,
-    runId,
-    signal,
-    dataDir,
-    indexPath,
-    llm,
-    memoryClient: options.memoryClient,
-    events: [],
-    nextSeq: startSeq,
-    casePkg: existing.pkg,
-    bamlCalls: 0,
-    emailDraft: null,
-    claims: null,
-    rules: null,
-    knowledge: [],
-    recordRefs: [],
-    decisionDraft: null,
-    reviseCount: 0,
-  };
+  const ctx: RunContext = buildContext(caseId, existing, runId, startSeq, options, dataDir, llm);
 
   await persist(ctx, (s) => {
     const cases = s.cases.map((c) =>
@@ -671,9 +905,23 @@ export async function* runCase(
     await finalizeCase(ctx, "error", existing.version + 1);
     return;
   }
-  const email = await generateEmail(ctx);
+  const email = await readEmailStage(ctx);
   for (const e of email.events) yield e;
   if (!email.ok) {
+    await finalizeCase(ctx, "error", existing.version + 1);
+    return;
+  }
+
+  if (checkAbort(ctx.signal)) {
+    const ev = await emitReviewable(ctx, "failed", "Run aborted", "error", { error: "aborted" });
+    yield ev;
+    await finalizeCase(ctx, "error", existing.version + 1);
+    return;
+  }
+
+  const locate = await locateAccountStage(ctx);
+  for (const e of locate.events) yield e;
+  if (!locate.ok) {
     await finalizeCase(ctx, "error", existing.version + 1);
     return;
   }
@@ -699,9 +947,9 @@ export async function* runCase(
     return;
   }
 
-  const lookup = await retrieveAndCheck(ctx);
-  for (const e of lookup.events) yield e;
-  if (!lookup.ok) {
+  const knowledge = await retrieveKnowledgeStage(ctx);
+  for (const e of knowledge.events) yield e;
+  if (!knowledge.ok) {
     await finalizeCase(ctx, "error", existing.version + 1);
     return;
   }
@@ -713,96 +961,131 @@ export async function* runCase(
     return;
   }
 
-  const rules = await evaluateRules(ctx);
-  for (const e of rules.events) yield e;
-  if (!rules.ok) {
+  const records = await checkRecordsStage(ctx);
+  for (const e of records.events) yield e;
+  if (!records.ok) {
     await finalizeCase(ctx, "error", existing.version + 1);
     return;
   }
 
-  const memoryContext: MemoryContext = await recallReviewerContext({
-    topic: ctx.casePkg.topic,
-    query: `${ctx.casePkg.topic} ${ctx.claims?.requestedAction ?? ""}`.trim(),
-    client: ctx.memoryClient ?? null,
+  if (checkAbort(ctx.signal)) {
+    const ev = await emitReviewable(ctx, "failed", "Run aborted", "error", { error: "aborted" });
+    yield ev;
+    await finalizeCase(ctx, "error", existing.version + 1);
+    return;
+  }
+
+  yield* decisionTail(ctx, existing.version + 1);
+}
+
+function latestEvent(
+  events: readonly TraceEvent[],
+  match: (e: TraceEvent) => boolean,
+): TraceEvent | null {
+  let best: TraceEvent | null = null;
+  for (const e of events) {
+    if (!match(e)) continue;
+    if (best === null || e.sequence > best.sequence) best = e;
+  }
+  return best;
+}
+
+function asExtractedClaims(payload: unknown): ExtractedClaims | null {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const p = payload as Record<string, unknown>;
+  if (typeof p.requestedAction !== "string") return null;
+  if (!Array.isArray(p.claims) || !Array.isArray(p.missingFields)) return null;
+  if (!Array.isArray(p.referencedTicketNumbers) || !Array.isArray(p.referencedStations)) return null;
+  return payload as ExtractedClaims;
+}
+
+export async function* resumeCase(
+  caseId: string,
+  answers: Record<string, string>,
+  options: RunCaseOptions = {},
+): AsyncGenerator<TraceEvent> {
+  const dataDir = resolve(options.dataDir ?? DEFAULT_DATA_DIR);
+  const llm: LlmClient = options.llm ?? defaultLlm;
+  const runId = ensureRunId(options.runId);
+
+  const state = await readState({ dataDir });
+  const existing = state.cases.find((c) => c.caseId === caseId);
+  if (!existing) {
+    throw new PipelineError("case_not_found", `case ${caseId} not found`);
+  }
+  if (existing.state !== "reviewable") {
+    throw new PipelineError(
+      "invalid_state",
+      `case ${caseId} is in state ${existing.state} and cannot be resumed`,
+    );
+  }
+  const caseEvents = state.events.filter((e) => e.caseId === caseId);
+  const latestReviewable = latestEvent(caseEvents, (e) => e.stage === "reviewable");
+  const outcome =
+    latestReviewable !== null &&
+    latestReviewable.payload !== null &&
+    typeof latestReviewable.payload === "object"
+      ? (latestReviewable.payload as { outcome?: unknown }).outcome
+      : undefined;
+  if (outcome !== "follow_up") {
+    throw new PipelineError("invalid_state", `case ${caseId} is not awaiting follow-up answers`);
+  }
+
+  const claimsEvent = latestEvent(
+    caseEvents,
+    (e) => e.stage === "extracting_claims" && e.status === "completed",
+  );
+  const claims = claimsEvent !== null ? asExtractedClaims(claimsEvent.payload) : null;
+  if (claims === null) {
+    throw new PipelineError("invalid_state", `case ${caseId} has no prior claims to resume from`);
+  }
+
+  const recordsEvent = latestEvent(
+    caseEvents,
+    (e) => e.stage === "checking_records" && e.status === "completed",
+  );
+  const startSeq = caseEvents.reduce((m, e) => (e.sequence > m ? e.sequence : m), 0) + 1;
+  const supplements = { ...(existing.supplements ?? {}), ...answers };
+
+  const ctx: RunContext = {
+    ...buildContext(caseId, existing, runId, startSeq, options, dataDir, llm),
+    storedEmail: existing.email,
+    emailDraft: existing.email
+      ? {
+          subject: existing.email.subject,
+          body: existing.email.body,
+          mentionedFacts: existing.email.mentionedFacts,
+        }
+      : null,
+    claims,
+    recordRefs: recordsEvent !== null ? [...recordsEvent.recordRefs] : recordRefsForPkg(existing.pkg),
+    supplements,
+  };
+
+  const terms = [
+    existing.topic,
+    existing.truthMode,
+    existing.email?.subject ?? "",
+    ...claims.claims.map((c) => c.kind),
+  ].filter((t) => t.length > 0);
+  ctx.knowledge = searchKnowledge(
+    { topic: existing.pkg.topic, terms, limit: 5 },
+    ctx.indexPath,
+  );
+
+  await persist(ctx, (s) => {
+    const cases = s.cases.map((c) =>
+      c.caseId === caseId
+        ? {
+            ...c,
+            state: "running" as CaseState,
+            supplements,
+            updatedAt: new Date().toISOString(),
+          }
+        : c,
+    );
+    return { ...s, cases };
   });
 
-  const shortCircuit =
-    (ctx.claims && ctx.claims.missingFields.length > 0) ||
-    ctx.rules?.outcome === "follow_up_required";
-  if (shortCircuit) {
-    const summary =
-      ctx.claims && ctx.claims.missingFields.length > 0
-        ? `Follow-up required: ${ctx.claims.missingFields.join(", ")}`
-        : "Follow-up required by deterministic rules";
-    const ev = await emitReviewable(ctx, "completed", summary, "follow_up");
-    yield ev;
-    await finalizeCase(ctx, "reviewable", existing.version + 1);
-    return;
-  }
-
-  if (ctx.rules?.outcome === "escalate") {
-    const ev = await emitReviewable(ctx, "completed", "Escalation recommended by deterministic rules", "escalate");
-    yield ev;
-    await finalizeCase(ctx, "escalated", existing.version + 1);
-    return;
-  }
-
-  const draft1 = await draftDecisionStage(ctx, memoryContext, false, []);
-  for (const e of draft1.events) yield e;
-  if (!draft1.ok) {
-    await finalizeCase(ctx, "error", existing.version + 1);
-    return;
-  }
-
-  if (checkAbort(ctx.signal)) {
-    const ev = await emitReviewable(ctx, "failed", "Run aborted", "error", { error: "aborted" });
-    yield ev;
-    await finalizeCase(ctx, "error", existing.version + 1);
-    return;
-  }
-
-  const critique1 = await critiqueStage(ctx);
-  for (const e of critique1.events) yield e;
-  if (!critique1.ok) {
-    await finalizeCase(ctx, "error", existing.version + 1);
-    return;
-  }
-
-  let finalReport = critique1.report;
-  if (finalReport && !finalReport.passed) {
-    const findings = finalReport.findings.map((f) => ({
-      severity: f.severity,
-      message: f.message,
-      evidenceRef: f.evidenceRef ?? null,
-    }));
-    const draft2 = await draftDecisionStage(ctx, memoryContext, true, findings);
-    for (const e of draft2.events) yield e;
-    if (!draft2.ok) {
-      await finalizeCase(ctx, "error", existing.version + 1);
-      return;
-    }
-    if (checkAbort(ctx.signal)) {
-      const ev = await emitReviewable(ctx, "failed", "Run aborted", "error", { error: "aborted" });
-      yield ev;
-      await finalizeCase(ctx, "error", existing.version + 1);
-      return;
-    }
-    const critique2 = await critiqueStage(ctx);
-    for (const e of critique2.events) yield e;
-    if (!critique2.ok) {
-      await finalizeCase(ctx, "error", existing.version + 1);
-      return;
-    }
-    finalReport = critique2.report;
-    if (finalReport && !finalReport.passed) {
-      const ev = await emitReviewable(ctx, "completed", "Critic failed twice; escalating", "escalate");
-      yield ev;
-      await finalizeCase(ctx, "escalated", existing.version + 1);
-      return;
-    }
-  }
-
-  const ev = await emitReviewable(ctx, "completed", "Decision ready for review", "reviewable");
-  yield ev;
-  await finalizeCase(ctx, "reviewable", existing.version + 1);
+  yield* decisionTail(ctx, existing.version + 1);
 }

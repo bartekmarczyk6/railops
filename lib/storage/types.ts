@@ -2,7 +2,7 @@ import type { LearningRecord } from "../memory/types.js";
 
 export type { LearningRecord };
 
-export const CURRENT_SCHEMA_VERSION = 1 as const;
+export const CURRENT_SCHEMA_VERSION = 2 as const;
 
 export type ReviewAction = "approve" | "reject" | "edit";
 
@@ -27,6 +27,8 @@ export type CaseState =
   | "error";
 
 export type PipelineStage =
+  | "reading_email"
+  | "locating_account"
   | "generating_email"
   | "extracting_claims"
   | "retrieving_knowledge"
@@ -59,6 +61,14 @@ export type TraceEvent = {
 
 export type DemoCasePackage = import("../domain/types.js").DemoCasePackage;
 
+export type StoredEmail = {
+  from: string;
+  subject: string;
+  body: string;
+  mentionedFacts: string[];
+  receivedAt: string;
+};
+
 export type StoredCase = {
   caseId: string;
   topic: string;
@@ -71,6 +81,9 @@ export type StoredCase = {
   trace: TraceEvent[];
   reviewHistory: ReviewRecord[];
   learningRef: string | null;
+  email: StoredEmail | null;
+  emailError: string | null;
+  supplements: Record<string, string>;
   version: number;
 };
 

@@ -484,6 +484,9 @@ async function seedReviewableCase(dataDir: string, draft: DecisionDraft): Promis
     trace,
     reviewHistory: [],
     learningRef: null,
+    email: null,
+    emailError: null,
+    supplements: {},
     version: 2,
   };
   await updateState((s) => ({ ...s, cases: [...s.cases, stored] }), { dataDir });
@@ -700,6 +703,9 @@ function makeChartCase(overrides: Partial<StoredCase> & { caseId: string }): Sto
     trace: [],
     reviewHistory: [],
     learningRef: null,
+    email: null,
+    emailError: null,
+    supplements: {},
     version: 2,
   };
   return { ...base, ...overrides };

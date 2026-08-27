@@ -15,9 +15,21 @@ support the request.
 template_string EVIDENCE_ONLY() #"
 Every fact, identifier, amount, time, and station you mention must come from the
 provided CasePackage facts, extracted claims, deterministic rule results, or
-retrieved KnowledgeExcerpts. Cite evidence references inline using the exact
-reference string provided (e.g., record:ticket:<id>, record:route:<id>,
-rule:<ver>:<id>, knowledge:<sourceId>:<heading>).
+retrieved KnowledgeExcerpts. Put evidence references ONLY in the structured
+evidence fields (evidenceRefs, decisionBasis.evidenceRef, mentionedFacts) using
+the exact reference string provided (e.g., record:ticket:<id>, record:route:<id>,
+record:payment:<id>, rule:<ver>:<id>, knowledge:<sourceId>:<heading>). Never
+write reference strings, internal ids, or UUIDs inside natural-language text
+fields such as body or response.
+"#
+
+
+template_string TONE_PASSENGER() #"
+You are writing AS the passenger, not as support staff. First person, casual
+and natural, like a real person typing an email from their phone. Short
+paragraphs, plain language, no formal letter phrasing ("Dear Sir/Madam",
+"Sincerely"), no policy talk, no internal jargon. Sign off with the
+passenger's first name only.
 "#
 
 

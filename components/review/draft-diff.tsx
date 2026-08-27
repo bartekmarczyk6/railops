@@ -1,5 +1,6 @@
 import React from "react";
 import type { DecisionDraft } from "@/lib/llm/types.ts";
+import { outcomeLabel } from "./formatters.ts";
 
 export type DraftDiffProps = {
   base: DecisionDraft;
@@ -8,16 +9,24 @@ export type DraftDiffProps = {
 
 type Field = { label: string; before: string; after: string };
 
+function displayAmount(amount: number | null): string {
+  return amount === null ? "—" : String(amount);
+}
+
 function fields(base: DecisionDraft, edited: DecisionDraft): Field[] {
   const out: Field[] = [];
   if (base.outcome !== edited.outcome) {
-    out.push({ label: "Outcome", before: base.outcome, after: edited.outcome });
+    out.push({
+      label: "Outcome",
+      before: outcomeLabel(base.outcome),
+      after: outcomeLabel(edited.outcome),
+    });
   }
   if ((base.proposedAmount ?? null) !== (edited.proposedAmount ?? null)) {
     out.push({
       label: "Proposed amount",
-      before: base.proposedAmount === null ? "null" : String(base.proposedAmount),
-      after: edited.proposedAmount === null ? "null" : String(edited.proposedAmount),
+      before: displayAmount(base.proposedAmount),
+      after: displayAmount(edited.proposedAmount),
     });
   }
   if (base.response !== edited.response) {
@@ -35,35 +44,35 @@ export function DraftDiff({ base, edited }: DraftDiffProps): React.JSX.Element {
   if (diffs.length === 0) {
     return (
       <div data-component="draft-diff" data-empty="true">
-        <p className="m-0">No differences yet.</p>
+        <p className="m-0 text-[12.5px] text-ink-3">No changes yet.</p>
       </div>
     );
   }
   return (
-    <div data-component="draft-diff" data-empty="false">
-      <ul className="m-0 grid list-none gap-2 p-0">
-        {diffs.map((d) => (
-          <li key={d.label} data-field="diff-row" data-label={d.label} className="grid gap-1">
-            <strong>{d.label}</strong>
-            <div className="grid gap-2 [grid-template-columns:1fr_1fr]">
-              <pre
-                data-field="before"
-                className="m-0 whitespace-pre-wrap rounded-md border p-2 text-sm"
-                style={{ background: "var(--surface-sunken)" }}
-              >
-                {d.before}
-              </pre>
-              <pre
-                data-field="after"
-                className="m-0 whitespace-pre-wrap rounded-md border p-2 text-sm"
-                style={{ background: "var(--surface-raised)" }}
-              >
-                {d.after}
-              </pre>
+    <div data-component="draft-diff" data-empty="false" className="grid gap-3">
+      {diffs.map((d) => (
+        <div key={d.label} data-field="diff-row" data-label={d.label} className="grid gap-1.5">
+          <span className="text-[11px] font-semibold tracking-wide text-ink-3 uppercase">
+            {d.label}
+          </span>
+          <div className="grid gap-1.5 sm:grid-cols-2">
+            <div
+              data-field="before"
+              className="rounded-control border-l-2 border-red bg-red-tint/40 px-2.5 py-1.5 text-[12.5px] whitespace-pre-wrap text-ink-2"
+            >
+              <span className="mb-0.5 block text-[10.5px] font-semibold text-red">Was</span>
+              {d.before}
             </div>
-          </li>
-        ))}
-      </ul>
+            <div
+              data-field="after"
+              className="rounded-control border-l-2 border-green bg-green-tint/40 px-2.5 py-1.5 text-[12.5px] whitespace-pre-wrap text-ink-2"
+            >
+              <span className="mb-0.5 block text-[10.5px] font-semibold text-green">Now</span>
+              {d.after}
+            </div>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

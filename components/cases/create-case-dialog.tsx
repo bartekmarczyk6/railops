@@ -2,7 +2,9 @@
 
 import { useContext, useEffect, useRef, useState } from "react";
 import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
+import { CircleCheck } from "lucide-react";
 
+import { Shimmer } from "../beui/atoms/Shimmer.tsx";
 import { Button } from "../ui/button.tsx";
 import {
   Dialog,
@@ -99,12 +101,98 @@ export const TRUTH_MODE_OPTIONS: ReadonlyArray<TopicOption> = [
 
 type FetchImpl = (
   url: string,
-  init: { method: string; headers: Record<string, string>; body: string },
+  init: { method: string; headers?: Record<string, string>; body?: string },
 ) => Promise<Response>;
 
 const defaultFetch: FetchImpl = (url, init) => fetch(url, init);
 
-type FormStatus = "idle" | "loading" | "success" | "error";
+type FormStatus = "idle" | "loading" | "feeding" | "success" | "error";
+
+export const CREATE_FEED_LINES: ReadonlyArray<string> = [
+  "Creating passenger profile…",
+  "Booking tickets and charging the card…",
+  "Watching the train boards…",
+  "Passenger is writing an email…",
+];
+
+export type CreateLoadingFeedProps = {
+  doneCount: number;
+};
+
+export function CreateLoadingFeed({ doneCount }: CreateLoadingFeedProps): React.JSX.Element {
+  return (
+    <div data-testid="create-loading" role="status" aria-live="polite" className="grid gap-2.5 py-2">
+      {CREATE_FEED_LINES.map((line, index) => {
+        const done = index < doneCount;
+        const active = index === doneCount;
+        const state = done ? "done" : active ? "active" : "pending";
+        return (
+          <div
+            key={line}
+            data-feed-line={index}
+            data-line-state={state}
+            className="flex items-center gap-2.5 text-[13px]"
+          >
+            {done ? (
+              <span className="enter-pop flex size-4 shrink-0 items-center justify-center text-green">
+                <CircleCheck className="size-4" />
+              </span>
+            ) : active ? (
+              <span className="flex size-4 shrink-0 items-center justify-center">
+                <span
+                  aria-hidden
+                  className="size-3 rounded-full border-[1.5px] border-line-strong border-t-ink-2 motion-reduce:animate-none"
+                  style={{ animation: "spin 700ms linear infinite" }}
+                />
+              </span>
+            ) : (
+              <span aria-hidden className="size-4 shrink-0" />
+            )}
+            {active ? (
+              <Shimmer>{line}</Shimmer>
+            ) : (
+              <span className={done ? "text-ink-2" : "text-ink-3"}>{line}</span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+export type PollCaseEmailOptions = {
+  pollMs?: number;
+  capMs?: number;
+  shouldStop?: () => boolean;
+};
+
+/* Poll GET /api/cases/[id] until the background email generation lands
+ * (email != null). Resolves true when the email appeared, false when the
+ * cap was hit (the case page handles an in-flight email). */
+export async function pollCaseEmail(
+  fetchImpl: FetchImpl,
+  caseId: string,
+  options: PollCaseEmailOptions = {},
+): Promise<boolean> {
+  const pollMs = options.pollMs ?? 700;
+  const capMs = options.capMs ?? 10_000;
+  const shouldStop = options.shouldStop ?? (() => false);
+  const startedAt = Date.now();
+  for (;;) {
+    if (shouldStop()) return false;
+    try {
+      const res = await fetchImpl(`/api/cases/${caseId}`, { method: "GET" });
+      if (res.ok) {
+        const data = (await res.json()) as { email?: unknown };
+        if (data && typeof data === "object" && data.email != null) return true;
+      }
+    } catch {
+      /* keep polling until the cap */
+    }
+    if (Date.now() - startedAt >= capMs) return false;
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+}
 
 export type CreateCaseFormProps = {
   onCreated: (caseId: string) => void;
@@ -123,9 +211,52 @@ export function CreateCaseForm({
   const [truthMode, setTruthMode] = useState(initialTruthMode);
   const [status, setStatus] = useState<FormStatus>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [createdCaseId, setCreatedCaseId] = useState<string | null>(null);
+  const [feedDone, setFeedDone] = useState(0);
+
+  const fetchImplRef = useRef(fetchImpl);
+  fetchImplRef.current = fetchImpl;
+  const onCreatedRef = useRef(onCreated);
+  onCreatedRef.current = onCreated;
 
   const busy = status === "loading";
   const canSubmit = topic !== "" && truthMode !== "" && !busy;
+
+  useEffect(() => {
+    if (status !== "feeding" || createdCaseId === null) return;
+    let cancelled = false;
+    const timers: Array<ReturnType<typeof setTimeout>> = [];
+    setFeedDone(1);
+    timers.push(setTimeout(() => { if (!cancelled) setFeedDone(2); }, 600));
+    timers.push(setTimeout(() => { if (!cancelled) setFeedDone(3); }, 1200));
+    void (async () => {
+      await pollCaseEmail(fetchImplRef.current, createdCaseId, {
+        shouldStop: () => cancelled,
+      });
+      if (cancelled) return;
+      setFeedDone(4);
+      timers.push(
+        setTimeout(() => {
+          if (cancelled) return;
+          setStatus("success");
+          onCreatedRef.current(createdCaseId);
+        }, 350),
+      );
+    })();
+    return () => {
+      cancelled = true;
+      for (const timer of timers) clearTimeout(timer);
+    };
+  }, [status, createdCaseId]);
+
+  if (status === "feeding") {
+    return (
+      <DialogPanel className="enter-fade-up flex flex-col gap-2 py-4">
+        <p className="m-0 font-bold text-[color:var(--text)]">Setting up the demo case</p>
+        <CreateLoadingFeed doneCount={feedDone} />
+      </DialogPanel>
+    );
+  }
 
   if (status === "success") {
     return (
@@ -176,8 +307,8 @@ export function CreateCaseForm({
         setStatus("error");
         return;
       }
-      setStatus("success");
-      onCreated(data.caseId);
+      setCreatedCaseId(data.caseId);
+      setStatus("feeding");
     } catch {
       setError("Network error. Please try again.");
       setStatus("error");

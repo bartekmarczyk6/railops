@@ -24,6 +24,12 @@ import { EmailPanel } from "../components/review/email-panel.tsx";
 import { DraftDiff } from "../components/review/draft-diff.tsx";
 import { ToolChip } from "../components/trace/tool-chip.tsx";
 import {
+  buildFollowUpAnswers,
+  buildFollowUpQuestions,
+  type FollowUpQuestion,
+} from "../components/review/follow-up-card.tsx";
+import { buildRunRequest } from "../hooks/use-case-run.ts";
+import {
   buildReviewInput,
   type ReviewFormState,
 } from "../lib/review-form.ts";
@@ -69,7 +75,8 @@ function makeCritique(): CritiqueReport {
 
 function makeTraceEvents(caseId: string, runId: string): TraceEvent[] {
   const stages: Array<{ stage: TraceEvent["stage"]; status: TraceEvent["status"]; summary: string; functionName: string | null; durationMs: number }> = [
-    { stage: "generating_email", status: "completed", summary: "Email generated", functionName: "GenerateCustomerEmail", durationMs: 100 },
+    { stage: "reading_email", status: "completed", summary: "Email read", functionName: null, durationMs: 40 },
+    { stage: "locating_account", status: "completed", summary: "Account matched by email", functionName: null, durationMs: 5 },
     { stage: "extracting_claims", status: "completed", summary: "Claims extracted", functionName: "ExtractCaseClaims", durationMs: 80 },
     { stage: "retrieving_knowledge", status: "completed", summary: "Knowledge retrieved", functionName: "searchKnowledge", durationMs: 60 },
     { stage: "checking_records", status: "completed", summary: "Record refs collected", functionName: "collectRecordRefs", durationMs: 20 },
@@ -110,6 +117,9 @@ function makeStoredCase(overrides: Partial<StoredCase> = {}): StoredCase {
     trace: makeTraceEvents(pkg.id, "run-1"),
     reviewHistory: [],
     learningRef: null,
+    email: null,
+    emailError: null,
+    supplements: {},
     version: 2,
   };
   return { ...base, ...overrides };
@@ -253,6 +263,23 @@ test("ApprovalCard: enabled when case state is reviewable", () => {
   assert.match(html, /Request changes/);
   assert.match(html, /Reject/);
   assert.doesNotMatch(html, /data-action="approve"[^>]*disabled/);
+});
+
+test("ApprovalCard: escalated state offers a retry action instead of a dead end", () => {
+  const html = renderToStaticMarkup(
+    createElement(ApprovalCard, buildApprovalProps({ state: "escalated", onRetry: () => {} })),
+  );
+  assert.match(html, /Run the agent again/);
+  assert.doesNotMatch(buttonTag(html, "retry"), /disabled=""/);
+  assert.doesNotMatch(html, /data-action="approve"/);
+});
+
+test("ApprovalCard: error state offers a retry action", () => {
+  const html = renderToStaticMarkup(
+    createElement(ApprovalCard, buildApprovalProps({ state: "error", onRetry: () => {} })),
+  );
+  assert.match(html, /Run the agent again/);
+  assert.match(html, /data-action="retry"/);
 });
 
 test("ApprovalCard: surfaces API error gracefully when feedback is empty on reject", () => {
@@ -630,4 +657,169 @@ test("CaseReviewPage: shows Hindsight unavailable warning when learning was not 
   );
   assert.match(html, /data-field="learning-warning"/);
   assert.match(html, /Hindsight unavailable/);
+});
+
+function makeEvent(
+  overrides: Partial<TraceEvent> & Pick<TraceEvent, "id" | "sequence" | "stage" | "status">,
+): TraceEvent {
+  return {
+    caseId: "c-1",
+    runId: "run-1",
+    summary: "",
+    functionName: null,
+    recordRefs: [],
+    evidenceRefs: [],
+    durationMs: null,
+    error: null,
+    timestamp: "2026-08-27T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+test("EventTimeline: started and completed events for a stage fold into one completed row", () => {
+  const events: TraceEvent[] = [
+    makeEvent({ id: "e-1", sequence: 1, stage: "extracting_claims", status: "started", summary: "Understanding the claim…" }),
+    makeEvent({ id: "e-2", sequence: 2, stage: "extracting_claims", status: "completed", summary: "Claims extracted", durationMs: 80 }),
+  ];
+  const html = renderToStaticMarkup(
+    createElement(EventTimeline, { events, onSelectEvent: () => undefined }),
+  );
+  const rows = html.match(/data-stage="extracting_claims"/g) ?? [];
+  assert.equal(rows.length, 1, "started and completed must render as a single row");
+  assert.match(html, /data-status="completed"/);
+  assert.doesNotMatch(html, /data-status="started"/, "no lingering spinner row once completed");
+  assert.match(html, /Claims extracted/);
+  assert.match(html, /80\s*ms/);
+});
+
+test("EventTimeline: a stage that starts again after closing opens a new row (revision rounds)", () => {
+  const events: TraceEvent[] = [
+    makeEvent({ id: "e-1", sequence: 1, stage: "drafting", status: "started" }),
+    makeEvent({ id: "e-2", sequence: 2, stage: "drafting", status: "completed", summary: "First draft" }),
+    makeEvent({ id: "e-3", sequence: 3, stage: "critiquing", status: "started" }),
+    makeEvent({ id: "e-4", sequence: 4, stage: "critiquing", status: "completed", summary: "Critic flagged issues" }),
+    makeEvent({ id: "e-5", sequence: 5, stage: "drafting", status: "started" }),
+    makeEvent({ id: "e-6", sequence: 6, stage: "drafting", status: "completed", summary: "Revised draft" }),
+  ];
+  const html = renderToStaticMarkup(
+    createElement(EventTimeline, { events, onSelectEvent: () => undefined }),
+  );
+  const draftingRows = html.match(/data-stage="drafting"/g) ?? [];
+  assert.equal(draftingRows.length, 2, "each drafting round gets its own row");
+  assert.doesNotMatch(html, /data-status="started"/, "every row resolved to a final status");
+  assert.match(html, /First draft/);
+  assert.match(html, /Revised draft/);
+});
+
+test("EventTimeline: reviewable events stay standalone rows", () => {
+  const events: TraceEvent[] = [
+    makeEvent({ id: "e-1", sequence: 1, stage: "drafting", status: "started" }),
+    makeEvent({ id: "e-2", sequence: 2, stage: "drafting", status: "completed" }),
+    makeEvent({ id: "e-3", sequence: 3, stage: "reviewable", status: "completed", summary: "Decision ready for review" }),
+  ];
+  const html = renderToStaticMarkup(
+    createElement(EventTimeline, { events, onSelectEvent: () => undefined }),
+  );
+  const buttons = html.match(/data-action="open-evidence"/g) ?? [];
+  assert.equal(buttons.length, 2, "folded drafting row plus standalone reviewable row");
+  assert.match(html, /data-stage="reviewable" data-status="completed"/);
+});
+
+function makeFollowUpCase(): StoredCase {
+  const missingFields = ["ticket_number", "departure_station"];
+  const payloadClaims: ExtractedClaims = {
+    requestedAction: "refund",
+    claims: [],
+    missingFields,
+    referencedTicketNumbers: [],
+    referencedStations: [],
+  };
+  const trace: TraceEvent[] = [
+    makeEvent({
+      id: "f-1",
+      sequence: 1,
+      stage: "extracting_claims",
+      status: "completed",
+      summary: "Claims extracted",
+      payload: payloadClaims,
+    }),
+    makeEvent({
+      id: "f-2",
+      sequence: 2,
+      stage: "reviewable",
+      status: "completed",
+      summary: "Follow-up required: ticket_number, departure_station",
+      payload: { outcome: "follow_up", draft: null, rules: null, claims: payloadClaims, knowledgeCount: 0 },
+    }),
+  ];
+  return makeStoredCase({ state: "reviewable", trace });
+}
+
+test("CaseReviewPage: follow-up case renders the question card with a question per missing field", () => {
+  const stored = makeFollowUpCase();
+  const html = renderToStaticMarkup(
+    createElement(CaseReviewPage, buildPageProps({ caseData: stored })),
+  );
+  assert.match(html, /data-component="follow-up-card"/);
+  assert.match(html, /The agent needs a hand/);
+  assert.match(html, /Can you confirm the ticket number\?/);
+  assert.match(html, /Can you confirm the departure station\?/);
+  assert.doesNotMatch(html, /data-action="approve"/, "approve buttons are replaced by the question card");
+});
+
+test("CaseReviewPage: complete reviewable case keeps the approve buttons (no question card)", () => {
+  const stored = makeStoredCase();
+  const html = renderToStaticMarkup(
+    createElement(CaseReviewPage, buildPageProps({ caseData: stored })),
+  );
+  assert.doesNotMatch(html, /data-component="follow-up-card"/);
+  assert.match(html, /data-action="approve"/);
+});
+
+test("buildFollowUpQuestions: ticket-ish fields get ticket options, station-ish fields get stations, others free text", () => {
+  const pkg = createDemoCase({ topic: "delay_refund", truthMode: "supported_by_records", seed: 7 });
+  const questions = buildFollowUpQuestions(
+    ["original_ticket_number", "departure_station", "journey_date"],
+    pkg,
+  );
+  assert.equal(questions.length, 3);
+  assert.deepEqual(questions[0]?.options, pkg.tickets.map((t) => t.id));
+  assert.deepEqual(questions[1]?.options, [pkg.route.origin, pkg.route.destination]);
+  assert.deepEqual(questions[2]?.options, []);
+  assert.equal(questions[0]?.id, "original_ticket_number");
+  assert.match(questions[0]?.q ?? "", /Can you confirm the original ticket number\?/);
+});
+
+test("buildFollowUpAnswers: radio picks one option, check joins selections and appends custom text", () => {
+  const questions: FollowUpQuestion[] = [
+    { id: "ticket_number", q: "?", type: "radio", options: ["TKT-1", "TKT-2"] },
+    { id: "stations", q: "?", type: "check", options: ["Warszawa", "Krakow"] },
+    { id: "journey_date", q: "?", type: "radio", options: [] },
+  ];
+  const answers = buildFollowUpAnswers(
+    questions,
+    { 0: [1], 1: [0, 1] },
+    { 1: "Gdansk", 2: "2026-08-01" },
+  );
+  assert.deepEqual(answers, {
+    ticket_number: "TKT-2",
+    stations: "Warszawa, Krakow, Gdansk",
+    journey_date: "2026-08-01",
+  });
+});
+
+test("buildRunRequest: resume body is POSTed as JSON, plain run has no body", () => {
+  const resume = buildRunRequest("case-1", { answers: { ticket_number: "TKT-000001" } });
+  assert.equal(resume.url, "/api/cases/case-1/run");
+  assert.equal(resume.init.method, "POST");
+  const headers = resume.init.headers as Record<string, string>;
+  assert.equal(headers["content-type"], "application/json");
+  assert.deepEqual(JSON.parse(String(resume.init.body)), {
+    answers: { ticket_number: "TKT-000001" },
+  });
+
+  const plain = buildRunRequest("case-1");
+  assert.equal(plain.url, "/api/cases/case-1/run");
+  assert.equal(plain.init.method, "POST");
+  assert.equal(plain.init.body, undefined);
 });

@@ -191,14 +191,20 @@ else {
   if (Get-EnvValue 'PLK_API_KEY') {
     Ok "kept existing PLK_API_KEY in $EnvFile"
   }
-  elseif (Confirm-Yes "Configure live PLK route data? (needs PLK_API_KEY; 'no' uses deterministic cassettes)") {
-    $PlkKey = Read-Secret 'Paste your PLK API key (input hidden):'
-    if ($PlkKey) { Set-EnvLocal 'PLK_API_KEY' $PlkKey }
-    else { Warn 'empty PLK_API_KEY - continuing with cassettes' }
-    $PlkKey = $null
-  }
   else {
-    Ok 'PLK_API_KEY skipped - deterministic cassettes under cassettes/plk/ will be used'
+    Say 'Live PLK route data requires a PLK API key:'
+    Say '  - API portal: https://pdp-api.plk-sa.pl/'
+    Say '  - Request a key using the form attached there; requests are reviewed in 3-5 days.'
+    Say "  - No key yet? Answer 'no' now and re-run this wizard once it arrives."
+    if (Confirm-Yes "Configure live PLK route data? (needs PLK_API_KEY; 'no' uses deterministic cassettes)") {
+      $PlkKey = Read-Secret 'Paste your PLK API key (input hidden):'
+      if ($PlkKey) { Set-EnvLocal 'PLK_API_KEY' $PlkKey }
+      else { Warn 'empty PLK_API_KEY - continuing with cassettes' }
+      $PlkKey = $null
+    }
+    else {
+      Ok 'PLK_API_KEY skipped - deterministic cassettes under cassettes/plk/ will be used'
+    }
   }
 }
 
@@ -284,7 +290,8 @@ elseif (Wait-ForHttp $DevUrl 1) {
 }
 else {
   Say "starting npm run dev (log: $RailopsDir\dev-server.log)"
-  $npmSrc = (Get-Command npm).Source
+  $npmSrc = (Get-Command npm.cmd -ErrorAction SilentlyContinue).Source
+  if (-not $npmSrc) { $npmSrc = (Get-Command npm).Source }
   $DevProc = Start-Process -FilePath $npmSrc -ArgumentList 'run', 'dev' -WorkingDirectory $RepoRoot -NoNewWindow -PassThru `
     -RedirectStandardOutput (Join-Path $RailopsDir 'dev-server.log') `
     -RedirectStandardError (Join-Path $RailopsDir 'dev-server.err.log')

@@ -76,6 +76,10 @@ export type RawCritiqueReport = {
   correctedDraft?: unknown;
 };
 
+export type RawRewriteResult = {
+  rewrittenSelection?: unknown;
+};
+
 export type RawBamlCaller = {
   GenerateCustomerEmail(input: {
     caseJson: string;
@@ -106,6 +110,56 @@ export type RawBamlCaller = {
     rulesJson: string;
     draftJson: string;
   }): Promise<RawCritiqueReport>;
+  RewriteResponseText?(input: {
+    selection: string;
+    instruction: string;
+    contextJson: string;
+  }): Promise<RawRewriteResult>;
+};
+
+export type RawEmailPartial = {
+  subject?: unknown;
+  body?: unknown;
+};
+
+export type RawDecisionPartial = {
+  response?: unknown;
+  outcome?: unknown;
+  proposedAmount?: unknown;
+};
+
+export type RawBamlStream<PartialOutput, FinalOutput> = {
+  [Symbol.asyncIterator](): AsyncIterableIterator<PartialOutput>;
+  getFinalResponse(): Promise<FinalOutput>;
+};
+
+export type RawBamlStreamer = {
+  GenerateCustomerEmail(input: {
+    caseJson: string;
+    topic: string;
+    truthMode: string;
+    claimsJson: string;
+    rulesJson: string;
+    knowledgeJson: string;
+    memoryJson: string;
+  }): RawBamlStream<RawEmailPartial, RawEmailDraft>;
+  DraftDecision(input: {
+    caseJson: string;
+    topic: string;
+    truthMode: string;
+    claimsJson: string;
+    rulesJson: string;
+    knowledgeJson: string;
+    memoryJson: string;
+  }): RawBamlStream<RawDecisionPartial, RawDecisionDraft>;
+};
+
+export type EmailPartial = { subject?: string; body?: string };
+
+export type DecisionPartial = {
+  response?: string;
+  outcome?: string;
+  proposedAmount?: number | null;
 };
 
 export type LlmErrorCode =
@@ -347,7 +401,19 @@ function mapCritiqueReport(raw: RawCritiqueReport): CritiqueReport {
   return { passed, findings, correctedDraft };
 }
 
-function buildBamlAdapter(caller: RawBamlCaller): {
+function mapRewriteResult(raw: RawRewriteResult): { rewrittenSelection: string } {
+  if (!isRecord(raw)) {
+    throw new LlmError("invalid_shape", "RewriteResponseText returned non-object");
+  }
+  const rewrittenSelection = assertString(
+    raw.rewrittenSelection,
+    "invalid_shape",
+    "rewrittenSelection",
+  );
+  return { rewrittenSelection };
+}
+
+type BamlAdapter = {
   generateCustomerEmail(
     caseJson: string,
     topic: string,
@@ -381,8 +447,41 @@ function buildBamlAdapter(caller: RawBamlCaller): {
     draftJson: string,
     signal?: AbortSignal,
   ): Promise<CritiqueReport>;
-} {
-  return {
+  rewriteResponseText?(
+    selection: string,
+    instruction: string,
+    contextJson: string,
+    signal?: AbortSignal,
+  ): Promise<{ rewrittenSelection: string }>;
+  streamGenerateCustomerEmail(
+    caseJson: string,
+    topic: string,
+    truthMode: string,
+    claimsJson: string,
+    rulesJson: string,
+    knowledgeJson: string,
+    memoryJson: string,
+    onPartial: (partial: EmailPartial) => void,
+    signal?: AbortSignal,
+  ): Promise<EmailDraft>;
+  streamDraftDecision(
+    caseJson: string,
+    topic: string,
+    truthMode: string,
+    claimsJson: string,
+    rulesJson: string,
+    knowledgeJson: string,
+    memoryJson: string,
+    onPartial: (partial: DecisionPartial) => void,
+    signal?: AbortSignal,
+  ): Promise<DecisionDraft>;
+};
+
+function buildBamlAdapter(
+  caller: RawBamlCaller,
+  streamer?: RawBamlStreamer,
+): BamlAdapter {
+  const adapter: BamlAdapter = {
     async generateCustomerEmail(
       caseJson,
       topic,
@@ -466,7 +565,135 @@ function buildBamlAdapter(caller: RawBamlCaller): {
         }
       });
     },
+    async streamGenerateCustomerEmail(
+      caseJson,
+      topic,
+      truthMode,
+      claimsJson,
+      rulesJson,
+      knowledgeJson,
+      memoryJson,
+      onPartial,
+      signal,
+    ) {
+      checkSignal(signal);
+      return withAbort(signal, async () => {
+        try {
+          if (streamer) {
+            const stream = streamer.GenerateCustomerEmail({
+              caseJson,
+              topic,
+              truthMode,
+              claimsJson,
+              rulesJson,
+              knowledgeJson,
+              memoryJson,
+            });
+            for await (const partial of stream) {
+              if (signal && signal.aborted) {
+                throw new LlmError("aborted", "request aborted during BAML stream");
+              }
+              const frame: EmailPartial = {};
+              if (typeof partial.subject === "string") frame.subject = partial.subject;
+              if (typeof partial.body === "string") frame.body = partial.body;
+              if (Object.keys(frame).length > 0) onPartial(frame);
+            }
+            const raw = await stream.getFinalResponse();
+            return mapEmail(raw);
+          }
+          const raw = await caller.GenerateCustomerEmail({
+            caseJson,
+            topic,
+            truthMode,
+            claimsJson,
+            rulesJson,
+            knowledgeJson,
+            memoryJson,
+          });
+          const email = mapEmail(raw);
+          onPartial({ subject: email.subject, body: email.body });
+          return email;
+        } catch (err) {
+          throw wrapBamlError(err);
+        }
+      });
+    },
+    async streamDraftDecision(
+      caseJson,
+      topic,
+      truthMode,
+      claimsJson,
+      rulesJson,
+      knowledgeJson,
+      memoryJson,
+      onPartial,
+      signal,
+    ) {
+      checkSignal(signal);
+      return withAbort(signal, async () => {
+        try {
+          if (streamer) {
+            const stream = streamer.DraftDecision({
+              caseJson,
+              topic,
+              truthMode,
+              claimsJson,
+              rulesJson,
+              knowledgeJson,
+              memoryJson,
+            });
+            for await (const partial of stream) {
+              if (signal && signal.aborted) {
+                throw new LlmError("aborted", "request aborted during BAML stream");
+              }
+              const frame: DecisionPartial = {};
+              if (typeof partial.response === "string") frame.response = partial.response;
+              if (typeof partial.outcome === "string") frame.outcome = partial.outcome;
+              if (partial.proposedAmount !== undefined) {
+                frame.proposedAmount =
+                  typeof partial.proposedAmount === "number" &&
+                  Number.isFinite(partial.proposedAmount)
+                    ? partial.proposedAmount
+                    : null;
+              }
+              if (Object.keys(frame).length > 0) onPartial(frame);
+            }
+            const raw = await stream.getFinalResponse();
+            return mapDecisionDraft(raw);
+          }
+          const raw = await caller.DraftDecision({
+            caseJson,
+            topic,
+            truthMode,
+            claimsJson,
+            rulesJson,
+            knowledgeJson,
+            memoryJson,
+          });
+          const draft = mapDecisionDraft(raw);
+          onPartial({ response: draft.response });
+          return draft;
+        } catch (err) {
+          throw wrapBamlError(err);
+        }
+      });
+    },
   };
+  const callRewrite = caller.RewriteResponseText;
+  if (callRewrite) {
+    adapter.rewriteResponseText = async (selection, instruction, contextJson, signal) => {
+      checkSignal(signal);
+      return withAbort(signal, async () => {
+        try {
+          const raw = await callRewrite({ selection, instruction, contextJson });
+          return mapRewriteResult(raw);
+        } catch (err) {
+          throw wrapBamlError(err);
+        }
+      });
+    };
+  }
+  return adapter;
 }
 
 function buildRawCallerFromBamlClient(client: typeof defaultBamlClient): RawBamlCaller {
@@ -475,11 +702,13 @@ function buildRawCallerFromBamlClient(client: typeof defaultBamlClient): RawBaml
     ExtractCaseClaims?: (...args: unknown[]) => Promise<unknown>;
     DraftDecision?: (...args: unknown[]) => Promise<unknown>;
     CritiqueDecision?: (...args: unknown[]) => Promise<unknown>;
+    RewriteResponseText?: (...args: unknown[]) => Promise<unknown>;
   };
   const callGenerateEmail = real.GenerateCustomerEmail;
   const callExtract = real.ExtractCaseClaims;
   const callDraft = real.DraftDecision;
   const callCritique = real.CritiqueDecision;
+  const callRewrite = real.RewriteResponseText;
   if (
     typeof callGenerateEmail !== "function" ||
     typeof callExtract !== "function" ||
@@ -488,7 +717,7 @@ function buildRawCallerFromBamlClient(client: typeof defaultBamlClient): RawBaml
   ) {
     throw new LlmError("unknown", "BAML client is missing required functions");
   }
-  return {
+  const caller: RawBamlCaller = {
     async GenerateCustomerEmail(input) {
       return (await callGenerateEmail.call(
         client,
@@ -531,16 +760,60 @@ function buildRawCallerFromBamlClient(client: typeof defaultBamlClient): RawBaml
       )) as RawCritiqueReport;
     },
   };
+  if (typeof callRewrite === "function") {
+    caller.RewriteResponseText = async (input) =>
+      (await callRewrite.call(
+        client,
+        input.selection,
+        input.instruction,
+        input.contextJson,
+      )) as RawRewriteResult;
+  }
+  return caller;
 }
 
-let currentAdapter = buildBamlAdapter(buildRawCallerFromBamlClient(defaultBamlClient));
+function buildRawStreamerFromBamlClient(client: typeof defaultBamlClient): RawBamlStreamer {
+  const streamClient = client.stream;
+  return {
+    GenerateCustomerEmail(input) {
+      return streamClient.GenerateCustomerEmail(
+        input.caseJson,
+        input.topic,
+        input.truthMode,
+        input.claimsJson,
+        input.rulesJson,
+        input.knowledgeJson,
+        input.memoryJson,
+      );
+    },
+    DraftDecision(input) {
+      return streamClient.DraftDecision(
+        input.caseJson,
+        input.topic,
+        input.truthMode,
+        input.claimsJson,
+        input.rulesJson,
+        input.knowledgeJson,
+        input.memoryJson,
+      );
+    },
+  };
+}
+
+let currentAdapter = buildBamlAdapter(
+  buildRawCallerFromBamlClient(defaultBamlClient),
+  buildRawStreamerFromBamlClient(defaultBamlClient),
+);
 
 export function setBamlClientForTesting(caller: RawBamlCaller): void {
   currentAdapter = buildBamlAdapter(caller);
 }
 
 export function resetBamlClientForTesting(): void {
-  currentAdapter = buildBamlAdapter(buildRawCallerFromBamlClient(defaultBamlClient));
+  currentAdapter = buildBamlAdapter(
+    buildRawCallerFromBamlClient(defaultBamlClient),
+    buildRawStreamerFromBamlClient(defaultBamlClient),
+  );
 }
 
 export type GenerateEmailInput = {
@@ -577,6 +850,24 @@ export async function generateCustomerEmail(
     params.rulesJson,
     params.knowledgeJson,
     params.memoryJson,
+    signal,
+  );
+}
+
+export async function streamGenerateCustomerEmail(
+  input: GenerateEmailInput,
+  onPartial: (partial: EmailPartial) => void,
+  signal?: AbortSignal,
+): Promise<EmailDraft> {
+  return currentAdapter.streamGenerateCustomerEmail(
+    input.casePackageJson,
+    input.topic,
+    input.truthMode,
+    input.claimsJson,
+    input.rulesJson,
+    input.knowledgeJson,
+    input.memoryJson,
+    onPartial,
     signal,
   );
 }
@@ -648,6 +939,24 @@ export async function draftDecision(
   );
 }
 
+export async function streamDraftDecision(
+  input: DraftDecisionInput,
+  onPartial: (partial: DecisionPartial) => void,
+  signal?: AbortSignal,
+): Promise<DecisionDraft> {
+  return currentAdapter.streamDraftDecision(
+    input.casePackageJson,
+    input.topic,
+    input.truthMode,
+    input.claimsJson,
+    input.rulesJson,
+    input.knowledgeJson,
+    input.memoryJson,
+    onPartial,
+    signal,
+  );
+}
+
 export type CritiqueDecisionInput = {
   casePackageJson: string;
   rulesJson: string;
@@ -670,6 +979,27 @@ export async function critiqueDecision(
     params.casePackageJson,
     params.rulesJson,
     params.draftJson,
+    signal,
+  );
+}
+
+export type RewriteTextInput = {
+  selection: string;
+  instruction: string;
+  contextJson: string;
+};
+
+export async function rewriteResponseText(
+  input: RewriteTextInput,
+  signal?: AbortSignal,
+): Promise<{ rewrittenSelection: string }> {
+  if (!currentAdapter.rewriteResponseText) {
+    throw new LlmError("unknown", "BAML client does not support RewriteResponseText");
+  }
+  return currentAdapter.rewriteResponseText(
+    input.selection,
+    input.instruction,
+    input.contextJson,
     signal,
   );
 }

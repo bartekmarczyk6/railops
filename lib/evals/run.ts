@@ -357,6 +357,9 @@ async function seedStoredCase(pkg: DemoCasePackage, dataDir: string): Promise<St
     trace: [],
     reviewHistory: [],
     learningRef: null,
+    email: null,
+    emailError: null,
+    supplements: {},
     version: 1,
   };
   await updateState((s) => ({ ...s, cases: [...s.cases, stored] }), { dataDir });
@@ -528,7 +531,7 @@ export async function runLiveSmokeTest(options?: RunLocalEvalOptions): Promise<E
       }
     }
     const stages = new Set(events.map((e) => e.stage));
-    for (const required of ["generating_email", "extracting_claims", "evaluating_rules"] as const) {
+    for (const required of ["reading_email", "extracting_claims", "evaluating_rules"] as const) {
       if (!stages.has(required)) {
         failures.push(`missing stage ${required}`);
       }

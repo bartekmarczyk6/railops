@@ -2,15 +2,7 @@
 
 import { useCallback, useState } from "react";
 
-import { Badge } from "./reui/badge.tsx";
-import { Button } from "./ui/button.tsx";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "./ui/card.tsx";
+import { Button } from "./beui/atoms/Button.tsx";
 import { ToastProvider } from "./ui/toast.tsx";
 import { CaseList } from "./cases/case-list.tsx";
 import { CreateCaseDialog } from "./cases/create-case-dialog.tsx";
@@ -46,75 +38,78 @@ export function Dashboard({ data, onOpenCase, onCaseCreated }: DashboardProps) {
 
   return (
     <ToastProvider>
-      <main className="mx-auto flex max-w-6xl flex-col gap-6 p-6">
-        <header className="flex flex-wrap items-start justify-between gap-4">
-          <div className="flex flex-col gap-2">
-            <Badge
-              variant="outline"
-              radius="full"
-              className="w-fit uppercase tracking-wide text-[color:var(--text-muted)]"
-            >
-              Synthetic data only
-            </Badge>
-            <h1 className="text-2xl font-bold text-[color:var(--text)]">
-              Demo Cases
-            </h1>
-            <p className="max-w-prose text-sm text-[color:var(--text-muted)]">
-              Every case below is generated locally. No real customer data is
-              touched and no external actions are taken.
+      <main className="mx-auto flex w-full max-w-5xl flex-col gap-8 px-4 py-8 sm:px-6">
+        <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-4">
+          <div className="flex flex-col gap-0.5">
+            <p className="font-display text-[15px] font-semibold tracking-tight text-ink">
+              KOLEO RailOps
+            </p>
+            <p className="text-[13px] text-ink-2">
+              Synthetic data only — no real customer data is used.
             </p>
           </div>
-          {!isEmpty ? (
-            <Button
-              variant="outline"
-              data-testid="header-new-case"
-              onClick={() => setDialogOpen(true)}
-            >
-              New case
-            </Button>
-          ) : null}
+          <Button
+            variant="accent"
+            data-testid="header-new-case"
+            onClick={() => setDialogOpen(true)}
+          >
+            Create demo case
+          </Button>
         </header>
 
         {isEmpty ? (
           <EmptyOnboarding onCreate={() => setDialogOpen(true)} />
         ) : (
-          <CaseList cases={data.cases} onOpen={openCase} />
+          <section aria-labelledby="cases-title" className="flex flex-col gap-4">
+            <div className="flex items-baseline gap-2 px-1">
+              <h1
+                id="cases-title"
+                className="font-display text-xl font-semibold tracking-tight text-ink"
+              >
+                Demo Cases
+              </h1>
+              <span className="font-mono text-[13px] text-ink-2 tabular-nums">
+                {data.stats.total}
+              </span>
+            </div>
+            <CaseList cases={data.cases} onOpen={openCase} />
+          </section>
         )}
 
         {hasReviewed ? (
-          <div data-testid="dashboard-charts" className="grid gap-4 md:grid-cols-2">
-            <Card>
-              <CardHeader>
-                <CardTitle>Reviewer alignment over case sequence</CardTitle>
-                <CardDescription>
+          <section
+            data-testid="dashboard-charts"
+            aria-label="Review insights"
+            className="grid gap-4 md:grid-cols-2"
+          >
+            <div className="flex flex-col gap-4 rounded-window bg-surface p-5 shadow-card">
+              <div className="flex flex-col gap-0.5">
+                <h2 className="text-sm font-semibold text-ink">
+                  Reviewer alignment over case sequence
+                </h2>
+                <p className="text-[13px] text-ink-2">
                   1.0 means the reviewer approved the draft unchanged, 0 means
                   it was rejected.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ReviewerAlignmentChart data={data.alignment} />
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle>Outcome distribution</CardTitle>
-                <CardDescription>
+                </p>
+              </div>
+              <ReviewerAlignmentChart data={data.alignment} />
+            </div>
+            <div className="flex flex-col gap-4 rounded-window bg-surface p-5 shadow-card">
+              <div className="flex flex-col gap-0.5">
+                <h2 className="text-sm font-semibold text-ink">
+                  Outcome distribution
+                </h2>
+                <p className="text-[13px] text-ink-2">
                   Final outcomes across all reviewed cases.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <OutcomeDistributionChart data={data.outcomes} />
-              </CardContent>
-            </Card>
-          </div>
+                </p>
+              </div>
+              <OutcomeDistributionChart data={data.outcomes} />
+            </div>
+          </section>
         ) : !isEmpty ? (
           <p
             data-testid="dashboard-charts-empty"
-            className={
-              "rounded-[var(--radius-md)] border border-dashed " +
-              "border-[color:var(--border)] bg-[color:var(--surface-raised)] p-4 " +
-              "text-sm text-[color:var(--text-muted)]"
-            }
+            className="rounded-window border border-dashed border-line-strong bg-surface p-4 text-sm text-ink-2"
           >
             Charts will appear after you review your first case.
           </p>

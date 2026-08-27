@@ -2,18 +2,32 @@ import { NextResponse } from "next/server";
 
 import { readState } from "@/lib/storage/store.ts";
 import { getLlmClient } from "@/lib/pipeline/llm-resolver.ts";
-import { runCase, PipelineError } from "@/lib/pipeline/run-case.ts";
+import { runCase, resumeCase, PipelineError } from "@/lib/pipeline/run-case.ts";
+import type { StreamFrame } from "@/lib/pipeline/run-case.ts";
 import type { TraceEvent } from "@/lib/storage/types.ts";
 import { getDataDir } from "@/app/api/_shared/data-dir.ts";
 
 type Params = { id: string };
 
-function sseFrame(event: TraceEvent): Uint8Array {
-  return new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`);
+function sseFrame(payload: TraceEvent | StreamFrame): Uint8Array {
+  return new TextEncoder().encode(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
 function notFound(): Response {
   return NextResponse.json({ error: "case_not_found" }, { status: 404 });
+}
+
+function parseAnswers(
+  raw: unknown,
+): { ok: true; answers: Record<string, string> | null } | { ok: false } {
+  if (raw === undefined) return { ok: true, answers: null };
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return { ok: false };
+  const entries = Object.entries(raw as Record<string, unknown>);
+  if (entries.length === 0) return { ok: true, answers: {} };
+  for (const [key, value] of entries) {
+    if (key.length === 0 || typeof value !== "string") return { ok: false };
+  }
+  return { ok: true, answers: Object.fromEntries(entries) as Record<string, string> };
 }
 
 export async function POST(
@@ -26,6 +40,29 @@ export async function POST(
   if (!state.cases.find((c) => c.caseId === id)) {
     return notFound();
   }
+
+  let parsed: unknown;
+  try {
+    const text = await request.text();
+    parsed = text.trim().length > 0 ? JSON.parse(text) : undefined;
+  } catch {
+    return NextResponse.json({ error: "invalid_input" }, { status: 400 });
+  }
+  let answers: Record<string, string> | null = null;
+  if (parsed !== undefined) {
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return NextResponse.json({ error: "invalid_input" }, { status: 400 });
+    }
+    const body = parsed as Record<string, unknown>;
+    if ("answers" in body) {
+      const result = parseAnswers(body.answers);
+      if (!result.ok) {
+        return NextResponse.json({ error: "invalid_input" }, { status: 400 });
+      }
+      answers = result.answers;
+    }
+  }
+
   const signal = request.signal;
   const llm = getLlmClient();
 
@@ -60,7 +97,21 @@ export async function POST(
         signal.addEventListener("abort", onAbort, { once: true });
       }
       try {
-        for await (const event of runCase(id, { dataDir, signal, llm })) {
+        const events =
+          answers !== null
+            ? resumeCase(id, answers, {
+                dataDir,
+                signal,
+                llm,
+                onStream: (frame) => enqueue(sseFrame(frame)),
+              })
+            : runCase(id, {
+                dataDir,
+                signal,
+                llm,
+                onStream: (frame) => enqueue(sseFrame(frame)),
+              });
+        for await (const event of events) {
           if (signal?.aborted) {
             close();
             return;

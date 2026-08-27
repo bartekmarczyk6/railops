@@ -1,15 +1,10 @@
 "use client";
 
-import { Button } from "../ui/button.tsx";
+import { ChevronRight } from "lucide-react";
+
+import { Button } from "../beui/atoms/Button.tsx";
+import { Button as LinkButton } from "../ui/button.tsx";
 import { Skeleton } from "../ui/skeleton.tsx";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "../ui/table.tsx";
 import type { StoredCase } from "../../lib/storage/types.ts";
 import { CaseStatusPill } from "./case-status.tsx";
 
@@ -64,7 +59,7 @@ function learningStateLabel(c: StoredCase): string {
   return LEARNING_STATE_LABELS.unsaved;
 }
 
-function formatCreatedAt(iso: string): string {
+function formatFullTimestamp(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   const yyyy = d.getUTCFullYear();
@@ -73,6 +68,26 @@ function formatCreatedAt(iso: string): string {
   const hh = String(d.getUTCHours()).padStart(2, "0");
   const mi = String(d.getUTCMinutes()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd} ${hh}:${mi} UTC`;
+}
+
+function formatRelativeTimestamp(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const diffMs = Date.now() - d.getTime();
+  const suffix = diffMs < 0 ? "from now" : "ago";
+  const minutes = Math.round(Math.abs(diffMs) / 60000);
+  if (minutes < 1) return diffMs < 0 ? "soon" : "just now";
+  if (minutes < 60) return `${minutes} min ${suffix}`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} h ${suffix}`;
+  const days = Math.round(hours / 24);
+  if (days < 30) return `${days} d ${suffix}`;
+  return d.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
 }
 
 export type CaseListProps = {
@@ -90,16 +105,16 @@ export function CaseList({ cases, onOpen, loading, error, onCreate }: CaseListPr
         role="status"
         aria-live="polite"
         data-testid="case-list-loading"
-        className="flex flex-col gap-3"
+        className="flex flex-col gap-3 rounded-window bg-surface p-4 shadow-card"
       >
-        <Skeleton className="h-10 w-full rounded-[var(--radius-md)]" />
-        <Skeleton className="h-10 w-full rounded-[var(--radius-md)]" />
-        <Skeleton className="h-10 w-full rounded-[var(--radius-md)]" />
-        <p className="text-sm text-[color:var(--text-muted)]">
+        <Skeleton className="h-12 w-full rounded-control" />
+        <Skeleton className="h-12 w-full rounded-control" />
+        <Skeleton className="h-12 w-full rounded-control" />
+        <p className="px-1 text-sm text-ink-2">
           Loading cases.{" "}
           <a
             href="/"
-            className="font-bold text-[color:var(--primary)] underline underline-offset-4"
+            className="font-medium text-accent-ink underline underline-offset-4"
           >
             Retry
           </a>{" "}
@@ -114,12 +129,12 @@ export function CaseList({ cases, onOpen, loading, error, onCreate }: CaseListPr
       <div
         role="alert"
         data-testid="case-list-error"
-        className="flex flex-col items-start gap-3 rounded-[var(--radius-md)] border border-[color:var(--error)] bg-[color:var(--surface-raised)] p-6"
+        className="flex flex-col items-start gap-3 rounded-window bg-surface p-6 shadow-card"
       >
-        <p className="text-sm text-[color:var(--error)]">{error}</p>
-        <Button variant="outline" render={<a href="/" />}>
+        <p className="text-sm font-medium text-red">{error}</p>
+        <LinkButton variant="outline" render={<a href="/" />}>
           Reload the page
-        </Button>
+        </LinkButton>
       </div>
     );
   }
@@ -128,11 +143,11 @@ export function CaseList({ cases, onOpen, loading, error, onCreate }: CaseListPr
     return (
       <div
         data-testid="case-list-empty"
-        className="flex flex-col items-start gap-3 rounded-[var(--radius-md)] border border-dashed border-[color:var(--border)] bg-[color:var(--surface-raised)] p-6"
+        className="flex flex-col items-center gap-4 rounded-window bg-surface p-10 text-center shadow-card"
       >
-        <p className="text-sm text-[color:var(--text-muted)]">No cases yet.</p>
+        <p className="text-sm text-ink-2">No cases yet.</p>
         {onCreate ? (
-          <Button data-testid="case-list-create" onClick={onCreate}>
+          <Button variant="accent" data-testid="case-list-create" onClick={onCreate}>
             Create demo case
           </Button>
         ) : null}
@@ -141,53 +156,81 @@ export function CaseList({ cases, onOpen, loading, error, onCreate }: CaseListPr
   }
 
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Case</TableHead>
-          <TableHead>Topic</TableHead>
-          <TableHead>Truth mode</TableHead>
-          <TableHead>Pipeline status</TableHead>
-          <TableHead>Reviewer outcome</TableHead>
-          <TableHead>Learning</TableHead>
-          <TableHead>Created</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {cases.map((c) => (
-          <TableRow
-            key={c.caseId}
-            data-testid={`case-row-${c.caseId}`}
-            className="cursor-pointer"
-            onClick={() => onOpen(c.caseId)}
-          >
-            <TableCell>
-              <a
-                href={`/case/${c.caseId}`}
-                className="font-bold text-[color:var(--primary)] underline underline-offset-4"
-                onClick={(e) => {
-                  e.preventDefault();
-                  onOpen(c.caseId);
-                }}
-              >
-                {c.caseId}
-              </a>
-            </TableCell>
-            <TableCell>{topicLabel(c.topic)}</TableCell>
-            <TableCell>{truthModeLabel(c.truthMode)}</TableCell>
-            <TableCell>
-              <CaseStatusPill state={c.state} />
-            </TableCell>
-            <TableCell>{reviewerOutcomeLabel(c)}</TableCell>
-            <TableCell>{learningStateLabel(c)}</TableCell>
-            <TableCell>
-              <time dateTime={c.createdAt} data-testid={`created-time-${c.caseId}`}>
-                {formatCreatedAt(c.createdAt)}
-              </time>
-            </TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+    <div className="overflow-x-auto rounded-window bg-surface shadow-card">
+      <table className="w-full whitespace-nowrap text-sm">
+        <thead>
+          <tr className="border-b border-line">
+            <th scope="col" className="px-4 py-3 text-left text-[13px] font-medium text-ink-2">
+              Case
+            </th>
+            <th scope="col" className="px-4 py-3 text-left text-[13px] font-medium text-ink-2">
+              Scenario
+            </th>
+            <th scope="col" className="px-4 py-3 text-left text-[13px] font-medium text-ink-2">
+              Status
+            </th>
+            <th scope="col" className="px-4 py-3 text-left text-[13px] font-medium text-ink-2">
+              Reviewer outcome
+            </th>
+            <th scope="col" className="px-4 py-3 text-left text-[13px] font-medium text-ink-2">
+              Learning
+            </th>
+            <th scope="col" className="px-4 py-3 text-left text-[13px] font-medium text-ink-2">
+              Created
+            </th>
+            <th scope="col" className="w-10 px-4 py-3">
+              <span className="sr-only">Open case</span>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {cases.map((c) => (
+            <tr
+              key={c.caseId}
+              data-testid={`case-row-${c.caseId}`}
+              className="group cursor-pointer border-b border-line last:border-b-0 hover:bg-hover"
+              onClick={() => onOpen(c.caseId)}
+            >
+              <td className="px-4 py-3.5">
+                <a
+                  href={`/case/${c.caseId}`}
+                  className="flex flex-col gap-0.5 rounded-chip focus-visible:outline-2"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    onOpen(c.caseId);
+                  }}
+                >
+                  <span className="font-medium text-ink">{topicLabel(c.topic)}</span>
+                  <span className="font-mono text-xs text-ink-2 tabular-nums">
+                    {c.caseId}
+                  </span>
+                </a>
+              </td>
+              <td className="px-4 py-3.5 text-ink">{truthModeLabel(c.truthMode)}</td>
+              <td className="px-4 py-3.5">
+                <CaseStatusPill state={c.state} />
+              </td>
+              <td className="px-4 py-3.5 text-ink">{reviewerOutcomeLabel(c)}</td>
+              <td className="px-4 py-3.5 text-ink-2">{learningStateLabel(c)}</td>
+              <td className="px-4 py-3.5 text-ink-2">
+                <time
+                  dateTime={c.createdAt}
+                  title={formatFullTimestamp(c.createdAt)}
+                  data-testid={`created-time-${c.caseId}`}
+                >
+                  {formatRelativeTimestamp(c.createdAt)}
+                </time>
+              </td>
+              <td className="px-4 py-3.5 text-right">
+                <ChevronRight
+                  aria-hidden="true"
+                  className="inline size-4 text-ink-3 group-hover:text-ink-2"
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }

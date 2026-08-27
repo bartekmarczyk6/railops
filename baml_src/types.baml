@@ -34,6 +34,7 @@ class CriticFinding {
 class EmailDraft {
   subject string @assert({{ this|length > 0 }})
   body string @assert({{ this|length > 0 }})
+    @assert(no_internal_refs, {{ not this|regex_match("record:|rule:|knowledge:") }})
   mentionedFacts string[] @assert({{ this|length > 0 }})
 }
 
@@ -57,4 +58,8 @@ class CritiqueReport {
   passed bool
   findings CriticFinding[]
   correctedDraft DecisionDraft?
+}
+
+class RewriteResult {
+  rewrittenSelection string @assert({{ this|length > 0 }})
 }

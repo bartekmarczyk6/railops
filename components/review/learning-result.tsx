@@ -1,7 +1,5 @@
 import React from "react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardHeader, CardPanel, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/beui/atoms/Button.tsx";
 import type { LearningRecord } from "@/lib/memory/types.ts";
 
 export type LearningResultProps = {
@@ -17,21 +15,20 @@ const ACTION_LABELS: Record<LearningRecord["reviewerAction"], string> = {
   edit: "Edited",
 };
 
-const ACTION_BADGE: Record<LearningRecord["reviewerAction"], "success" | "error" | "info"> = {
-  approve: "success",
-  reject: "error",
-  edit: "info",
+const ACTION_TONE: Record<LearningRecord["reviewerAction"], string> = {
+  approve: "bg-green-tint text-green",
+  reject: "bg-red-tint text-red",
+  edit: "bg-accent-tint text-accent-ink",
 };
 
 function learningSummary(record: LearningRecord): string {
   if (record.reviewerAction === "approve") {
-    return `The reviewer approved the agent's draft (${record.finalDraftSummary}).`;
+    return "The reviewer approved the agent's draft as written.";
   }
   if (record.reviewerAction === "reject") {
-    const guidance = record.changedGuidance[0] ?? "the draft did not meet policy";
-    return `The reviewer rejected the draft: ${guidance}.`;
+    return "The reviewer rejected the agent's draft.";
   }
-  return `The reviewer edited the draft: ${record.originalDraftSummary} became ${record.finalDraftSummary}.`;
+  return "The reviewer edited the agent's draft before it went out.";
 }
 
 export function LearningResult({
@@ -39,42 +36,51 @@ export function LearningResult({
   learningSaved,
   reviewed,
   onUndo,
-}: LearningResultProps): React.JSX.Element {
+}: LearningResultProps): React.JSX.Element | null {
+  if (!record && !reviewed) return null;
   return (
-    <Card
+    <section
       data-component="learning-result"
       data-section="learning"
       data-learning-saved={learningSaved ? "true" : "false"}
+      aria-label="What the agent learned"
+      className="enter-fade-up overflow-hidden rounded-card bg-surface shadow-card"
     >
-      <CardHeader>
-        <CardTitle>What the AI Agent learned</CardTitle>
-      </CardHeader>
-      <CardPanel className="grid gap-2">
+      <div className="border-b border-line px-4 py-2.5">
+        <h2 className="m-0 font-display text-[14px] font-semibold text-ink">
+          What the AI Agent learned
+        </h2>
+      </div>
+      <div className="grid gap-2.5 p-4">
         {record ? (
           <>
             <p className="m-0">
-              <Badge
-                variant={ACTION_BADGE[record.reviewerAction]}
+              <span
                 data-field="action-badge"
                 data-action={record.reviewerAction}
+                className={`inline-flex h-6 items-center rounded-full px-2.5 text-[12px] font-medium ${ACTION_TONE[record.reviewerAction]}`}
               >
                 {ACTION_LABELS[record.reviewerAction]}
-              </Badge>
+              </span>
             </p>
-            <p data-field="summary" className="m-0">
+            <p data-field="summary" className="m-0 text-[13px] text-ink">
               {learningSummary(record)}
             </p>
             {record.changedGuidance.length > 0 ? (
-              <ul data-field="guidance" className="m-0 ps-4">
+              <ul data-field="guidance" className="m-0 grid list-none gap-1 p-0">
                 {record.changedGuidance.map((g, i) => (
-                  <li key={i}>{g}</li>
+                  <li key={i} className="flex gap-2 text-[12.5px] text-ink-2">
+                    <span aria-hidden className="mt-[7px] size-1 shrink-0 rounded-full bg-line-strong" />
+                    {g}
+                  </li>
                 ))}
               </ul>
             ) : null}
             {onUndo && record.id ? (
               <div>
                 <Button
-                  variant="outline"
+                  variant="secondary"
+                  size="sm"
                   data-action="undo-learning"
                   onClick={() => void onUndo(record.id as string)}
                 >
@@ -84,7 +90,7 @@ export function LearningResult({
             ) : null}
           </>
         ) : (
-          <p data-field="none" className="m-0">
+          <p data-field="none" className="m-0 text-[13px] text-ink-3">
             No learning recorded yet for this case.
           </p>
         )}
@@ -92,18 +98,17 @@ export function LearningResult({
           <p
             data-field="learning-warning"
             role="status"
-            className="m-0"
-            style={{ color: "var(--error)" }}
+            className="m-0 rounded-control border border-orange/30 bg-orange-tint px-3 py-2 text-[12.5px] font-medium text-orange"
           >
             Hindsight unavailable — this learning was saved locally only and is not yet
             shared with future runs.
           </p>
         ) : null}
-        <p data-field="footnote" className="m-0 text-xs" style={{ color: "var(--text-muted)" }}>
+        <p data-field="footnote" className="m-0 text-[11.5px] text-ink-3">
           Learning shapes future drafts. It does not change deterministic eligibility or
           approval authority.
         </p>
-      </CardPanel>
-    </Card>
+      </div>
+    </section>
   );
 }

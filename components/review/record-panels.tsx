@@ -1,20 +1,9 @@
 "use client";
 
 import React from "react";
-import {
-  Accordion,
-  AccordionItem,
-  AccordionPanel,
-  AccordionTrigger,
-} from "@/components/ui/accordion";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { useRef } from "react";
+import { CircleCheck } from "lucide-react";
+import { topicLabel } from "@/components/cases/case-list.tsx";
 import type {
   AccountRecord,
   DemoCasePackage,
@@ -23,6 +12,7 @@ import type {
   RouteRecord,
   TicketRecord,
 } from "@/lib/domain/types.ts";
+import { formatDateTime, formatMoney, humanize } from "./formatters.ts";
 
 export type RecordPanelsProps = {
   pkg: DemoCasePackage;
@@ -32,291 +22,339 @@ export type RecordPanelsProps = {
     state: string;
     updatedAt: string;
   }>;
+  verified?: boolean;
 };
 
-const ALL_PANELS = [
-  "account",
-  "tickets",
-  "passengers",
-  "payments",
-  "route",
-  "disruption",
-  "history",
-];
-
-export function RecordPanels({ pkg, priorHistory }: RecordPanelsProps): React.JSX.Element {
+function Row({
+  label,
+  field,
+  refValue,
+  children,
+}: {
+  label: string;
+  field?: string;
+  refValue?: string;
+  children: React.ReactNode;
+}): React.JSX.Element {
   return (
-    <section data-section="records" className="grid gap-2">
-      <h2 className="m-0">Synthetic records</h2>
-      <Accordion
-        multiple
-        defaultValue={ALL_PANELS}
-        data-component="record-panels"
-        className="rounded-2xl border bg-card px-4"
+    <div className="flex items-baseline justify-between gap-3 border-b border-line py-1.5 last:border-b-0">
+      <span className="shrink-0 text-[12.5px] text-ink-3">{label}</span>
+      <span
+        data-field={field}
+        data-record-ref={refValue}
+        className="min-w-0 text-right text-[13px] font-medium text-ink"
       >
-        <AccordionItem value="account">
-          <AccordionTrigger className="min-h-11">Account</AccordionTrigger>
-          <AccordionPanel>
-            <AccountPanel account={pkg.account} />
-          </AccordionPanel>
-        </AccordionItem>
-        <AccordionItem value="tickets">
-          <AccordionTrigger className="min-h-11">Tickets ({pkg.tickets.length})</AccordionTrigger>
-          <AccordionPanel>
-            <TicketsPanel tickets={pkg.tickets} />
-          </AccordionPanel>
-        </AccordionItem>
-        <AccordionItem value="passengers">
-          <AccordionTrigger className="min-h-11">Passengers</AccordionTrigger>
-          <AccordionPanel>
-            <PassengersPanel tickets={pkg.tickets} />
-          </AccordionPanel>
-        </AccordionItem>
-        <AccordionItem value="payments">
-          <AccordionTrigger className="min-h-11">Payments ({pkg.payments.length})</AccordionTrigger>
-          <AccordionPanel>
-            <PaymentsPanel payments={pkg.payments} />
-          </AccordionPanel>
-        </AccordionItem>
-        <AccordionItem value="route">
-          <AccordionTrigger className="min-h-11">Route</AccordionTrigger>
-          <AccordionPanel>
-            <RoutePanel route={pkg.route} />
-          </AccordionPanel>
-        </AccordionItem>
-        <AccordionItem value="disruption">
-          <AccordionTrigger className="min-h-11">Disruption</AccordionTrigger>
-          <AccordionPanel>
-            <DisruptionPanel disruption={pkg.disruption} />
-          </AccordionPanel>
-        </AccordionItem>
-        <AccordionItem value="history">
-          <AccordionTrigger className="min-h-11">Prior refund / change history</AccordionTrigger>
-          <AccordionPanel>
-            <PriorHistoryPanel history={priorHistory} />
-          </AccordionPanel>
-        </AccordionItem>
-      </Accordion>
-    </section>
-  );
-}
-
-function AccountPanel({ account }: { account: AccountRecord }): React.JSX.Element {
-  return (
-    <Table data-role="record-table">
-      <TableBody>
-        <TableRow>
-          <TableHead>Email</TableHead>
-          <TableCell data-record-ref={`record:account:${account.id}`} data-field="email">
-            {account.email}
-          </TableCell>
-        </TableRow>
-        <TableRow>
-          <TableHead>Name</TableHead>
-          <TableCell data-field="full-name">{account.fullName}</TableCell>
-        </TableRow>
-        <TableRow>
-          <TableHead>Status</TableHead>
-          <TableCell data-field="status">{account.status}</TableCell>
-        </TableRow>
-        <TableRow>
-          <TableHead>Prior cases</TableHead>
-          <TableCell data-field="prior-case-count">{account.priorCaseCount}</TableCell>
-        </TableRow>
-        <TableRow>
-          <TableHead>Created</TableHead>
-          <TableCell data-field="created-at">{account.createdAt}</TableCell>
-        </TableRow>
-      </TableBody>
-    </Table>
-  );
-}
-
-function TicketsPanel({ tickets }: { tickets: TicketRecord[] }): React.JSX.Element {
-  return (
-    <div className="grid gap-3">
-      {tickets.map((t) => (
-        <Table key={t.id} data-record-ref={`record:ticket:${t.id}`} data-role="record-table">
-          <TableBody>
-            <TableRow>
-              <TableHead>Number</TableHead>
-              <TableCell data-field="number">{t.number}</TableCell>
-            </TableRow>
-            <TableRow>
-              <TableHead>Train / seat</TableHead>
-              <TableCell data-field="train-seat">
-                {t.train} / {t.carriage} / {t.seat}
-              </TableCell>
-            </TableRow>
-            <TableRow>
-              <TableHead>Departure</TableHead>
-              <TableCell data-field="departure">{t.departureScheduled}</TableCell>
-            </TableRow>
-            <TableRow>
-              <TableHead>Arrival</TableHead>
-              <TableCell data-field="arrival">{t.arrivalScheduled}</TableCell>
-            </TableRow>
-            <TableRow>
-              <TableHead>Direction</TableHead>
-              <TableCell data-field="direction">{t.direction}</TableCell>
-            </TableRow>
-            <TableRow>
-              <TableHead>Relief</TableHead>
-              <TableCell data-field="relief">{t.relief}</TableCell>
-            </TableRow>
-            <TableRow>
-              <TableHead>Price</TableHead>
-              <TableCell data-field="price">
-                {t.paidPrice} {t.currency}
-              </TableCell>
-            </TableRow>
-            <TableRow>
-              <TableHead>History</TableHead>
-              <TableCell data-field="history">
-                <ul className="m-0 ps-4">
-                  {t.history.map((h, i) => (
-                    <li key={i} data-record-ref={`record:ticket:${t.id}`}>
-                      {h.type} @ {h.timestamp}
-                      {h.note ? ` (${h.note})` : ""}
-                    </li>
-                  ))}
-                </ul>
-              </TableCell>
-            </TableRow>
-          </TableBody>
-        </Table>
-      ))}
+        {children}
+      </span>
     </div>
   );
 }
 
-function PassengersPanel({ tickets }: { tickets: TicketRecord[] }): React.JSX.Element {
+function RecordGroup({
+  title,
+  count,
+  children,
+}: {
+  title: string;
+  count?: number;
+  children: React.ReactNode;
+}): React.JSX.Element {
   return (
-    <ul className="m-0 ps-4">
-      {tickets.flatMap((t) =>
-        t.passengers.map((p) => (
-          <li key={p.id} data-record-ref={`record:passenger:${p.id}`} data-field="passenger">
-            {p.fullName} (ticket {t.number})
-          </li>
-        )),
-      )}
-    </ul>
+    <div className="grid gap-1">
+      <h3 className="m-0 flex items-center gap-1.5 text-[13px] font-semibold text-ink">
+        {title}
+        {count !== undefined ? (
+          <span className="inline-flex h-5 items-center rounded-md bg-inset px-1.5 text-[11px] font-medium tabular-nums text-ink-2">
+            {count}
+          </span>
+        ) : null}
+      </h3>
+      <div className="rounded-control px-3 shadow-hairline">{children}</div>
+    </div>
   );
 }
 
-function PaymentsPanel({ payments }: { payments: PaymentRecord[] }): React.JSX.Element {
+export function RecordPanels({
+  pkg,
+  priorHistory,
+  verified = true,
+}: RecordPanelsProps): React.JSX.Element {
+  const verifyFlip = useRef({ prev: verified, hit: false });
+  if (verified && !verifyFlip.current.prev) verifyFlip.current.hit = true;
+  verifyFlip.current.prev = verified;
   return (
-    <Table data-role="record-table">
-      <TableHeader>
-        <TableRow>
-          <TableHead>ID</TableHead>
-          <TableHead>Amount</TableHead>
-          <TableHead>Method</TableHead>
-          <TableHead>Status</TableHead>
-          <TableHead>Created</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {payments.map((p) => (
-          <TableRow key={p.id} data-record-ref={`record:payment:${p.id}`}>
-            <TableCell data-field="id">{p.id}</TableCell>
-            <TableCell data-field="amount">
-              {p.amount} {p.currency}
-            </TableCell>
-            <TableCell data-field="method">{p.method}</TableCell>
-            <TableCell data-field="status">{p.status}</TableCell>
-            <TableCell data-field="created">{p.createdAt}</TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+    <section
+      data-component="record-panels"
+      data-section="records"
+      aria-label="Passenger file"
+      className="overflow-hidden rounded-card bg-surface shadow-card"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2.5">
+        <h2 className="m-0 font-display text-[14px] font-semibold text-ink">Passenger file</h2>
+        {verified ? (
+          <span
+            data-field="verified"
+            className={`inline-flex h-6 items-center gap-1.5 rounded-full bg-green-tint px-2.5 text-[12px] font-medium text-green${
+              verifyFlip.current.hit ? " enter-fade-up" : ""
+            }`}
+          >
+            <CircleCheck className="size-3.5" /> Records verified
+          </span>
+        ) : (
+          <span
+            data-field="verifying"
+            role="status"
+            className="inline-flex h-6 items-center gap-1.5 rounded-full bg-inset px-2.5 text-[12px] font-medium text-ink-2"
+          >
+            <span
+              aria-hidden
+              className="size-3 rounded-full border-[1.5px] border-line-strong border-t-ink-2"
+              style={{ animation: "spin 700ms linear infinite" }}
+            />
+            Checking the records…
+          </span>
+        )}
+      </div>
+      <div className="grid gap-4 p-4">
+        <RecordGroup title="Account">
+          <AccountRows account={pkg.account} />
+        </RecordGroup>
+        <RecordGroup title="Tickets" count={pkg.tickets.length}>
+          {pkg.tickets.length === 0 ? (
+            <p data-field="none" className="m-0 py-2 text-[13px] text-ink-3">
+              No tickets on this account.
+            </p>
+          ) : (
+            <div className="grid gap-2 py-2">
+              {pkg.tickets.map((t) => (
+                <TicketBlock key={t.id} ticket={t} />
+              ))}
+            </div>
+          )}
+        </RecordGroup>
+        <RecordGroup title="Payments" count={pkg.payments.length}>
+          {pkg.payments.length === 0 ? (
+            <p data-field="none" className="m-0 py-2 text-[13px] text-ink-3">
+              No payments recorded.
+            </p>
+          ) : (
+            <div className="py-1">
+              {pkg.payments.map((p) => (
+                <PaymentRows key={p.id} payment={p} />
+              ))}
+            </div>
+          )}
+        </RecordGroup>
+        <RecordGroup title="Journey">
+          <RouteRows route={pkg.route} />
+        </RecordGroup>
+        <RecordGroup title="Disruption">
+          <DisruptionRows disruption={pkg.disruption} />
+        </RecordGroup>
+        <RecordGroup title="Prior cases" count={priorHistory.length}>
+          <PriorHistoryRows history={priorHistory} />
+        </RecordGroup>
+      </div>
+    </section>
   );
 }
 
-function RoutePanel({ route }: { route: RouteRecord }): React.JSX.Element {
+function AccountRows({ account }: { account: AccountRecord }): React.JSX.Element {
   return (
-    <Table data-role="record-table">
-      <TableBody>
-        <TableRow>
-          <TableHead>Origin → Destination</TableHead>
-          <TableCell data-record-ref={`record:route:${route.id}`} data-field="route">
-            {route.origin} → {route.destination}
-          </TableCell>
-        </TableRow>
-        <TableRow>
-          <TableHead>Scheduled</TableHead>
-          <TableCell data-field="scheduled">
-            {route.scheduledDeparture} → {route.scheduledArrival}
-          </TableCell>
-        </TableRow>
-        <TableRow>
-          <TableHead>Actual</TableHead>
-          <TableCell data-field="actual">
-            {route.actualDeparture ?? "—"} → {route.actualArrival ?? "—"}
-          </TableCell>
-        </TableRow>
-        <TableRow>
-          <TableHead>Operator</TableHead>
-          <TableCell data-field="operator">{route.operator}</TableCell>
-        </TableRow>
-      </TableBody>
-    </Table>
+    <>
+      <Row label="Name" field="full-name">
+        {account.fullName}
+      </Row>
+      <Row label="Email" field="email" refValue={`record:account:${account.id}`}>
+        <span className="font-mono text-[12px] font-normal">{account.email}</span>
+      </Row>
+      <Row label="Status" field="status">
+        {humanize(account.status)}
+      </Row>
+      <Row label="Prior cases" field="prior-case-count">
+        <span className="tabular-nums">{account.priorCaseCount}</span>
+      </Row>
+      <Row label="Customer since" field="created-at">
+        <span className="font-mono text-[12px] font-normal tabular-nums">
+          {formatDateTime(account.createdAt)}
+        </span>
+      </Row>
+    </>
   );
 }
 
-function DisruptionPanel({ disruption }: { disruption: DisruptionRecord | null }): React.JSX.Element {
+function TicketBlock({ ticket }: { ticket: TicketRecord }): React.JSX.Element {
+  return (
+    <div
+      data-record-ref={`record:ticket:${ticket.id}`}
+      className="rounded-control bg-inset/60 px-3"
+    >
+      <Row label="Ticket" field="number">
+        <span className="font-mono tabular-nums">{ticket.number}</span>
+      </Row>
+      <Row label="Train / seat" field="train-seat">
+        {ticket.train} · coach {ticket.carriage} · seat {ticket.seat}
+      </Row>
+      <Row label="Departure" field="departure">
+        <span className="font-mono text-[12px] font-normal tabular-nums">
+          {formatDateTime(ticket.departureScheduled)}
+        </span>
+      </Row>
+      <Row label="Arrival" field="arrival">
+        <span className="font-mono text-[12px] font-normal tabular-nums">
+          {formatDateTime(ticket.arrivalScheduled)}
+        </span>
+      </Row>
+      <Row label="Direction" field="direction">
+        {humanize(ticket.direction)}
+      </Row>
+      <Row label="Relief" field="relief">
+        {ticket.relief === "none" ? "None" : `${humanize(ticket.relief)} relief`}
+      </Row>
+      <Row label="Paid" field="price">
+        <span className="font-mono tabular-nums">{formatMoney(ticket.paidPrice, ticket.currency)}</span>
+      </Row>
+      {ticket.passengers.length > 0 ? (
+        <Row label="Passengers" field="passengers">
+          {ticket.passengers.map((p, i) => (
+            <React.Fragment key={p.id}>
+              {i > 0 ? ", " : ""}
+              <span data-record-ref={`record:passenger:${p.id}`} data-field="passenger">
+                {p.fullName}
+              </span>
+            </React.Fragment>
+          ))}
+        </Row>
+      ) : null}
+      {ticket.history.length > 0 ? (
+        <div className="py-1.5">
+          <span className="text-[12px] text-ink-3">History</span>
+          <ul data-field="history" className="m-0 mt-1 grid list-none gap-0.5 p-0">
+            {ticket.history.map((h, i) => (
+              <li
+                key={i}
+                data-record-ref={`record:ticket:${ticket.id}`}
+                className="flex flex-wrap items-baseline justify-between gap-2 text-[12.5px] text-ink-2"
+              >
+                <span>{humanize(h.type)}{h.note ? ` — ${h.note}` : ""}</span>
+                <span className="font-mono text-[11.5px] tabular-nums text-ink-3">
+                  {formatDateTime(h.timestamp)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function PaymentRows({ payment }: { payment: PaymentRecord }): React.JSX.Element {
+  return (
+    <div data-record-ref={`record:payment:${payment.id}`}>
+      <Row label="Amount" field="amount">
+        <span className="font-mono tabular-nums">{formatMoney(payment.amount, payment.currency)}</span>
+      </Row>
+      <Row label="Method" field="method">
+        {humanize(payment.method)}
+      </Row>
+      <Row label="Status" field="status">
+        {humanize(payment.status)}
+      </Row>
+      <Row label="Created" field="created">
+        <span className="font-mono text-[12px] font-normal tabular-nums">
+          {formatDateTime(payment.createdAt)}
+        </span>
+      </Row>
+    </div>
+  );
+}
+
+function RouteRows({ route }: { route: RouteRecord }): React.JSX.Element {
+  return (
+    <>
+      <Row label="Route" field="route" refValue={`record:route:${route.id}`}>
+        {route.origin} → {route.destination}
+      </Row>
+      <Row label="Scheduled" field="scheduled">
+        <span className="font-mono text-[12px] font-normal tabular-nums">
+          {formatDateTime(route.scheduledDeparture)} → {formatDateTime(route.scheduledArrival)}
+        </span>
+      </Row>
+      <Row label="Actual" field="actual">
+        <span className="font-mono text-[12px] font-normal tabular-nums">
+          {route.actualDeparture ? formatDateTime(route.actualDeparture) : "—"} →{" "}
+          {route.actualArrival ? formatDateTime(route.actualArrival) : "—"}
+        </span>
+      </Row>
+      <Row label="Operator" field="operator">
+        {route.operator}
+      </Row>
+    </>
+  );
+}
+
+function DisruptionRows({
+  disruption,
+}: {
+  disruption: DisruptionRecord | null;
+}): React.JSX.Element {
   if (!disruption) {
     return (
-      <p data-field="none" className="m-0">
+      <p data-field="none" className="m-0 py-2 text-[13px] text-ink-3">
         No disruption recorded.
       </p>
     );
   }
   return (
-    <Table data-record-ref={`record:disruption:${disruption.id}`} data-role="record-table">
-      <TableBody>
-        <TableRow>
-          <TableHead>Type</TableHead>
-          <TableCell data-field="type">{disruption.type}</TableCell>
-        </TableRow>
-        <TableRow>
-          <TableHead>Scheduled delay</TableHead>
-          <TableCell data-field="scheduled-delay">{disruption.scheduledDelayMinutes} min</TableCell>
-        </TableRow>
-        <TableRow>
-          <TableHead>Actual delay</TableHead>
-          <TableCell data-field="actual-delay">{disruption.actualDelayMinutes} min</TableCell>
-        </TableRow>
-        <TableRow>
-          <TableHead>Cause</TableHead>
-          <TableCell data-field="cause">{disruption.cause}</TableCell>
-        </TableRow>
-        <TableRow>
-          <TableHead>Reported</TableHead>
-          <TableCell data-field="reported">{disruption.reportedAt}</TableCell>
-        </TableRow>
-      </TableBody>
-    </Table>
+    <div data-record-ref={`record:disruption:${disruption.id}`}>
+      <Row label="Type" field="type">
+        {humanize(disruption.type)}
+      </Row>
+      <Row label="Scheduled delay" field="scheduled-delay">
+        <span className="tabular-nums">{disruption.scheduledDelayMinutes} min</span>
+      </Row>
+      <Row label="Actual delay" field="actual-delay">
+        <span className="tabular-nums">{disruption.actualDelayMinutes} min</span>
+      </Row>
+      <Row label="Cause" field="cause">
+        {disruption.cause}
+      </Row>
+      <Row label="Reported" field="reported">
+        <span className="font-mono text-[12px] font-normal tabular-nums">
+          {formatDateTime(disruption.reportedAt)}
+        </span>
+      </Row>
+    </div>
   );
 }
 
-function PriorHistoryPanel({
+function PriorHistoryRows({
   history,
 }: {
   history: Array<{ caseId: string; topic: string; state: string; updatedAt: string }>;
 }): React.JSX.Element {
   if (history.length === 0) {
     return (
-      <p data-field="none" className="m-0">
+      <p data-field="none" className="m-0 py-2 text-[13px] text-ink-3">
         No prior cases for this account.
       </p>
     );
   }
   return (
-    <ul className="m-0 ps-4">
+    <ul className="m-0 grid list-none gap-1 py-2 p-0">
       {history.map((h, i) => (
-        <li key={i} data-record-ref={`record:case:${h.caseId}`}>
-          {h.topic} ({h.state}) @ {h.updatedAt}
+        <li
+          key={i}
+          data-record-ref={`record:case:${h.caseId}`}
+          className="flex flex-wrap items-baseline justify-between gap-2 text-[12.5px]"
+        >
+          <span className="text-ink">
+            {topicLabel(h.topic)} <span className="text-ink-3">· {humanize(h.state)}</span>
+          </span>
+          <span className="font-mono text-[11.5px] tabular-nums text-ink-3">
+            {formatDateTime(h.updatedAt)}
+          </span>
         </li>
       ))}
     </ul>

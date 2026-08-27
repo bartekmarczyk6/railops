@@ -13,6 +13,7 @@ import type { LearningRecord } from "@/lib/memory/types.ts";
 import type { StoredCase, TraceEvent } from "@/lib/storage/types.ts";
 import type { KnowledgeExcerpt, KnowledgePassage } from "@/lib/knowledge/types.ts";
 import { CaseReviewPage } from "@/components/review/case-review-page.tsx";
+import { OUTCOME_LABEL } from "@/components/review/formatters.ts";
 import type { ReviewInput } from "@/lib/pipeline/review.ts";
 import { reviewCase, revertLearning } from "@/lib/pipeline/review.ts";
 import type { KnowledgeExcerptView } from "@/components/review/knowledge-panel.tsx";
@@ -48,16 +49,8 @@ function confidenceFor(decision: DecisionDraft, critique: CritiqueReport): "high
 }
 
 function alternativesFor(decision: DecisionDraft): string[] {
-  const all: Array<DecisionDraft["outcome"]> = [
-    "refund",
-    "change",
-    "follow_up",
-    "unsupported_or_escalate",
-    "information",
-  ];
-  return all
-    .filter((o) => o !== decision.outcome)
-    .map((o) => o.replaceAll("_", " "));
+  const all = Object.keys(OUTCOME_LABEL) as Array<DecisionDraft["outcome"]>;
+  return all.filter((o) => o !== decision.outcome).map((o) => OUTCOME_LABEL[o]);
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -72,22 +65,59 @@ function getEventPayload<T>(events: readonly TraceEvent[], stage: TraceEvent["st
   return payload as unknown as T;
 }
 
+function lastReviewableEvent(events: readonly TraceEvent[]): TraceEvent | null {
+  let best: TraceEvent | null = null;
+  for (const e of events) {
+    if (e.stage !== "reviewable" || e.status !== "completed") continue;
+    if (best === null || e.sequence > best.sequence) best = e;
+  }
+  return best;
+}
+
+type ReviewableTracePayload = {
+  outcome?: unknown;
+  claims?: unknown;
+};
+
+function isExtractedClaims(value: unknown): value is ExtractedClaims {
+  if (!isPlainObject(value)) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.requestedAction === "string" &&
+    Array.isArray(v.claims) &&
+    Array.isArray(v.missingFields) &&
+    Array.isArray(v.referencedTicketNumbers) &&
+    Array.isArray(v.referencedStations)
+  );
+}
+
 function extractFromTrace(events: readonly TraceEvent[], passages: readonly KnowledgePassage[]): PipelineOutputs | null {
-  const emailPayload = getEventPayload<{
-    subject?: unknown;
-    body?: unknown;
-    mentionedFacts?: unknown;
-  }>(events, "generating_email");
-  const claims = getEventPayload<ExtractedClaims>(events, "extracting_claims");
-  const decision = getEventPayload<DecisionDraft>(events, "drafting");
-  const critique = getEventPayload<CritiqueReport>(events, "critiquing");
-  if (!emailPayload || !claims || !decision || !critique) return null;
+  const emailPayload =
+    getEventPayload<{
+      subject?: unknown;
+      body?: unknown;
+      mentionedFacts?: unknown;
+    }>(events, "reading_email") ??
+    getEventPayload<{
+      subject?: unknown;
+      body?: unknown;
+      mentionedFacts?: unknown;
+    }>(events, "generating_email");
+  if (!emailPayload) return null;
   if (
     typeof emailPayload.subject !== "string" ||
     typeof emailPayload.body !== "string"
   ) {
     return null;
   }
+  const reviewable = lastReviewableEvent(events);
+  const reviewablePayload =
+    reviewable && isPlainObject(reviewable.payload)
+      ? (reviewable.payload as ReviewableTracePayload)
+      : null;
+  const claimsPayload = getEventPayload<ExtractedClaims>(events, "extracting_claims");
+  const claims = claimsPayload ?? (isExtractedClaims(reviewablePayload?.claims) ? reviewablePayload.claims : null);
+  if (!claims) return null;
   const knowledgePayload = getEventPayload<{ ids?: unknown }>(events, "retrieving_knowledge");
   const knowledgeIds = Array.isArray(knowledgePayload?.ids)
     ? (knowledgePayload!.ids as unknown[]).filter((v): v is string => typeof v === "string")
@@ -99,15 +129,30 @@ function extractFromTrace(events: readonly TraceEvent[], passages: readonly Know
   const mentionedFacts = Array.isArray(emailPayload.mentionedFacts)
     ? (emailPayload.mentionedFacts as unknown[]).filter((v): v is string => typeof v === "string")
     : [];
+  const email: EmailDraft = {
+    subject: emailPayload.subject,
+    body: emailPayload.body,
+    mentionedFacts,
+  };
+  const decision = getEventPayload<DecisionDraft>(events, "drafting");
+  const critique = getEventPayload<CritiqueReport>(events, "critiquing");
+  if (decision && critique) {
+    return { email, claims, decision, critique, knowledge };
+  }
+  if (!reviewable || !reviewablePayload) return null;
+  const outcome = reviewablePayload.outcome;
+  if (outcome !== "follow_up" && outcome !== "escalate") return null;
   return {
-    email: {
-      subject: emailPayload.subject,
-      body: emailPayload.body,
-      mentionedFacts,
-    },
+    email,
     claims,
-    decision,
-    critique,
+    decision: {
+      outcome: outcome === "escalate" ? "unsupported_or_escalate" : "follow_up",
+      proposedAmount: null,
+      decisionBasis: [],
+      response: reviewable.summary,
+      evidenceRefs: reviewable.evidenceRefs,
+    },
+    critique: { passed: true, findings: [], correctedDraft: null },
     knowledge,
   };
 }
@@ -178,6 +223,13 @@ export default async function CasePage({
   }
   const outputs =
     extractFromTrace(caseEvents, knowledgeIndex.passages) ?? fallbackPipelineOutputs();
+  if (stored.email) {
+    outputs.email = {
+      subject: stored.email.subject,
+      body: stored.email.body,
+      mentionedFacts: stored.email.mentionedFacts,
+    };
+  }
 
   const knowledge = buildKnowledgeView(outputs.knowledge);
   const hindsight: LearningRecord[] = state.learning;
@@ -216,7 +268,9 @@ export default async function CasePage({
   return (
     <CaseReviewPage
       caseData={{ ...stored, trace: caseEvents }}
+      live={stored.state === "created" || stored.state === "running"}
       email={outputs.email}
+      storedEmail={stored.email}
       claims={outputs.claims}
       decision={outputs.decision}
       critique={outputs.critique}

@@ -311,7 +311,7 @@ export function evaluateCase(input: { pkg: DemoCasePackage; claims: ExtractedCla
     }
     return evaluateUnsupported(pkg);
   }
-  if (pkg.truthMode === "insufficient_information") {
+  if (pkg.truthMode === "insufficient_information" && claims.missingFields.length > 0) {
     return {
       outcome: "follow_up_required",
       amount: null,

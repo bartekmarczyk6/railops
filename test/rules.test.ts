@@ -73,6 +73,26 @@ test("rules: delay_refund + insufficient_information (no payment) → follow_up_
   assert.equal(ev.amount, null);
 });
 
+test("rules: delay_refund + insufficient_information with missing fields → follow_up_required", () => {
+  const c = pkg("delay_refund", "insufficient_information", 7);
+  const ev = evaluateCase({ pkg: c, claims: emptyClaims({ missingFields: ["claimed_delay_minutes"] }) });
+  assert.equal(ev.outcome, "follow_up_required");
+  assert.equal(ev.amount, null);
+});
+
+test("rules: delay_refund + insufficient_information with no missing fields falls through to normal evaluation", () => {
+  const c = pkg("delay_refund", "insufficient_information", 7);
+  const paidPrice = c.tickets[0]!.paidPrice;
+  const mutated: DemoCasePackage = { ...c, disruption: { ...c.disruption!, actualDelayMinutes: 45 } };
+  const result = evaluateCase({ pkg: mutated, claims: emptyClaims() });
+  assert.equal(result.outcome, "eligible");
+  assert.ok(result.amount !== null, "amount must be set");
+  assert.ok(
+    Math.abs(result.amount - paidPrice * 0.5) < 0.01,
+    `expected ${paidPrice * 0.5}, got ${result.amount}`,
+  );
+});
+
 test("rules: cancelled_train_refund + supported + cancellation → eligible for full refund", () => {
   const c = pkg("cancelled_train_refund", "supported_by_records", 7);
   const ev = evaluateCase({ pkg: c, claims: emptyClaims() });

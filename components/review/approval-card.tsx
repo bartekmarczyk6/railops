@@ -1,8 +1,9 @@
 "use client";
 
 import React from "react";
-import { useState } from "react";
-import { ApprovalCard as BeuiApprovalCard } from "@/components/agents/approval-card";
+import { useRef, useState } from "react";
+import { CircleCheck, CircleX } from "lucide-react";
+import { Button } from "@/components/beui/atoms/Button.tsx";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -12,9 +13,7 @@ import {
   AlertDialogPopup,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
-import { Card, CardDescription, CardHeader, CardPanel, CardTitle } from "@/components/ui/card";
+import { Button as UIButton } from "@/components/ui/button";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/textarea";
 import type { CaseState } from "@/lib/storage/types.ts";
@@ -33,6 +32,7 @@ export type ApprovalCardProps = {
   onSaveEdit: () => Promise<boolean> | boolean;
   onApprove: () => Promise<boolean> | boolean;
   onReject: () => Promise<boolean> | boolean;
+  onRetry?: () => void;
   pending: boolean;
   lastError?: string | null;
 };
@@ -47,6 +47,27 @@ function errorMessage(code: string | null | undefined): string | null {
   if (code === "version_mismatch") return "The case changed while you were editing. Refresh and retry.";
   if (code === "invalid_state") return "The case is no longer reviewable.";
   return `Review action failed: ${code}`;
+}
+
+function stateReadout(state: CaseState): string {
+  switch (state) {
+    case "reviewable":
+      return "The draft is ready. Approve it, request changes, or reject it with feedback.";
+    case "revising":
+      return "This is the revised draft. Approve or reject — one revision per case, so editing is locked.";
+    case "approved":
+      return "You approved this draft.";
+    case "rejected":
+      return "You rejected this draft.";
+    case "escalated":
+      return "The agent's self-review flagged problems it could not fix, so the case was escalated to you instead of guessing. Run the agent again to retry, or handle it manually.";
+    case "learning_saved":
+      return "Review complete — the learning was saved.";
+    case "error":
+      return "The agent run failed. You can run the agent again to retry.";
+    default:
+      return "Approval unlocks once the agent finishes and the case is reviewable.";
+  }
 }
 
 export type RejectDialogBodyProps = {
@@ -84,20 +105,27 @@ export function RejectDialogBody({
         </Field>
       </div>
       <AlertDialogFooter>
-        <AlertDialogClose render={<Button variant="outline" />} data-action="cancel-reject">
+        <AlertDialogClose render={<UIButton variant="outline" />} data-action="cancel-reject">
           Cancel
         </AlertDialogClose>
-        <Button
+        <UIButton
           variant="destructive"
           data-action="confirm-reject"
           disabled={!canSubmit}
           onClick={onConfirm}
         >
           Confirm reject
-        </Button>
+        </UIButton>
       </AlertDialogFooter>
     </>
   );
+}
+
+function useStickyFlip(flag: boolean): boolean {
+  const ref = useRef({ prev: flag, hit: false });
+  if (flag && !ref.current.prev) ref.current.hit = true;
+  ref.current.prev = flag;
+  return ref.current.hit;
 }
 
 export function ApprovalCard({
@@ -111,6 +139,7 @@ export function ApprovalCard({
   onSaveEdit,
   onApprove,
   onReject,
+  onRetry,
   pending,
   lastError,
 }: ApprovalCardProps): React.JSX.Element {
@@ -120,90 +149,130 @@ export function ApprovalCard({
   const errMsg = errorMessage(lastError ?? null);
   const edited = form.editedDraft ?? decision;
   const changed = draftDiffFields(decision, edited).length > 0;
+  const unlocked = useStickyFlip(isReviewable);
+  const approvedFlip = useStickyFlip(state === "approved");
+  const rejectedFlip = useStickyFlip(state === "rejected");
 
   return (
     <section
       data-component="approval-card"
       data-state={state}
       data-disabled={disabled ? "true" : "false"}
+      aria-label="Your decision"
     >
-      <Card>
-        <CardHeader>
-          <CardTitle>Reviewer actions</CardTitle>
-          <CardDescription data-field="state-readout">
-            Current state: <strong>{state}</strong>
-            {disabled ? " — approval actions are disabled until the case is reviewable." : ""}
-          </CardDescription>
-        </CardHeader>
-        <CardPanel className="grid gap-3">
+      <div className="overflow-hidden rounded-card bg-surface shadow-card">
+        <div className="border-b border-line px-4 py-2.5">
+          <h2 className="m-0 font-display text-[14px] font-semibold text-ink">Your decision</h2>
+        </div>
+        <div className="grid gap-3 p-4">
+          <p data-field="state-readout" className="m-0 text-[13px] text-ink-2">
+            {stateReadout(state)}
+          </p>
           {isReviewable ? (
-            <BeuiApprovalCard
-              title="Reviewer decision"
-              description={
-                state === "revising"
-                  ? "Revised draft. Approve or reject — one revision per case, editing is now locked."
-                  : "Approve the draft, request changes (edit), or reject with feedback."
-              }
-              status={pending ? "submitting" : "pending"}
-              onApprove={() => void onApprove()}
-              onReject={() => setRejectOpen(true)}
-              onRequestChanges={state === "revising" ? undefined : onStartEdit}
-              approveLabel="Approve"
-            />
-          ) : state === "approved" ? (
-            <BeuiApprovalCard
-              title="Reviewer decision"
-              status="approved"
-              result="The draft was approved."
-            />
-          ) : state === "rejected" ? (
-            <BeuiApprovalCard
-              title="Reviewer decision"
-              status="rejected"
-              result="The draft was rejected."
-            />
-          ) : (
-            <div role="group" aria-label="Reviewer actions" className="flex flex-wrap gap-2">
-              <Button data-action="approve" disabled>
-                Approve
+            <div
+              role="group"
+              aria-label="Reviewer actions"
+              className={`flex flex-wrap items-center gap-2${unlocked ? " enter-fade-up" : ""}`}
+            >
+              <Button
+                variant="accent"
+                data-action="approve"
+                disabled={pending}
+                onClick={() => void onApprove()}
+              >
+                {pending ? "Saving…" : "Approve"}
               </Button>
-              <Button data-action="reject" variant="outline" disabled>
+              {state !== "revising" ? (
+                <Button
+                  variant="secondary"
+                  data-action="edit"
+                  disabled={pending || editing}
+                  onClick={onStartEdit}
+                >
+                  Request changes
+                </Button>
+              ) : null}
+              <Button
+                variant="ghost"
+                data-action="reject"
+                disabled={pending}
+                onClick={() => setRejectOpen(true)}
+              >
                 Reject
               </Button>
-              <Button data-action="edit" variant="outline" disabled>
-                Edit draft
+            </div>
+          ) : state === "approved" ? (
+            <p
+              className={`m-0 inline-flex items-center gap-2 text-[13px] font-medium text-green${
+                approvedFlip ? " enter-fade-up" : ""
+              }`}
+            >
+              <CircleCheck className={`size-4${approvedFlip ? " enter-pop" : ""}`} /> Draft approved
+            </p>
+          ) : state === "rejected" ? (
+            <p
+              className={`m-0 inline-flex items-center gap-2 text-[13px] font-medium text-red${
+                rejectedFlip ? " enter-fade-up" : ""
+              }`}
+            >
+              <CircleX className={`size-4${rejectedFlip ? " enter-pop" : ""}`} /> Draft rejected
+            </p>
+          ) : state === "escalated" || state === "error" ? (
+            <div role="group" aria-label="Reviewer actions" className="flex flex-wrap items-center gap-2">
+              {onRetry ? (
+                <Button variant="accent" data-action="retry" disabled={pending} onClick={onRetry}>
+                  {pending ? "Running…" : "Run the agent again"}
+                </Button>
+              ) : null}
+            </div>
+          ) : (
+            <div role="group" aria-label="Reviewer actions" className="flex flex-wrap items-center gap-2">
+              <Button variant="accent" data-action="approve" disabled>
+                Approve
+              </Button>
+              <Button variant="secondary" data-action="edit" disabled>
+                Request changes
+              </Button>
+              <Button variant="ghost" data-action="reject" disabled>
+                Reject
               </Button>
             </div>
           )}
           {editing && isReviewable && state !== "revising" ? (
-            <div data-component="edit-surface" className="grid gap-3 rounded-xl border p-3">
-              <p className="m-0">
-                Save the edited draft. The case moves to <strong>revising</strong> and you
-                cannot edit again.
+            <div
+              data-component="edit-surface"
+              className="enter-fade-up grid gap-3 rounded-control border border-line bg-inset/50 p-3"
+            >
+              <p className="m-0 text-[12.5px] text-ink-2">
+                Saving moves the case to <strong>revising</strong> — you cannot edit again.
               </p>
               <DraftDiff base={decision} edited={edited} />
               <div className="flex flex-wrap gap-2">
                 <Button
+                  variant="accent"
                   data-action="save-edit"
                   disabled={!changed || pending}
                   onClick={() => void onSaveEdit()}
                 >
-                  Save edit
+                  Save changes
                 </Button>
-                <Button data-action="cancel-edit" variant="outline" onClick={onCancelEdit}>
+                <Button variant="secondary" data-action="cancel-edit" onClick={onCancelEdit}>
                   Cancel
                 </Button>
               </div>
             </div>
           ) : null}
           {errMsg ? (
-            <Alert variant="error" data-field="error">
-              <AlertTitle>Review action failed</AlertTitle>
-              <AlertDescription>{errMsg}</AlertDescription>
-            </Alert>
+            <p
+              data-field="error"
+              role="alert"
+              className="m-0 rounded-control border border-red/30 bg-red-tint px-3 py-2 text-[12.5px] font-medium text-red"
+            >
+              {errMsg}
+            </p>
           ) : null}
-        </CardPanel>
-      </Card>
+        </div>
+      </div>
       <AlertDialog open={rejectOpen} onOpenChange={setRejectOpen}>
         <AlertDialogPopup>
           <RejectDialogBody

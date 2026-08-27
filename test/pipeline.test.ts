@@ -16,7 +16,7 @@ import type {
   CriticFinding,
 } from "../lib/llm/types.ts";
 
-import { runCase, MaxRevisionsReached, ReviewError } from "../lib/pipeline/run-case.ts";
+import { runCase, resumeCase, MaxRevisionsReached, PipelineError, ReviewError } from "../lib/pipeline/run-case.ts";
 import { reviewCase, type ReviewInput } from "../lib/pipeline/review.ts";
 import type { LlmClient } from "../lib/pipeline/run-case.ts";
 import type { RunCaseOptions } from "../lib/pipeline/run-case.ts";
@@ -143,7 +143,7 @@ function makeFakeLlm(): FakeLlm {
 
 async function seedCase(
   dataDir: string,
-  overrides: { topic?: "delay_refund" | "passenger_name_change"; truthMode?: "supported_by_records" | "fabricated_delay" | "insufficient_information" | "fraud_attempt"; seed?: number } = {},
+  overrides: { topic?: "delay_refund" | "passenger_name_change"; truthMode?: "supported_by_records" | "fabricated_delay" | "insufficient_information" | "fraud_attempt"; seed?: number; supplements?: Record<string, string> } = {},
 ): Promise<StoredCase> {
   const topic = overrides.topic ?? "delay_refund";
   const truthMode = overrides.truthMode ?? "supported_by_records";
@@ -162,6 +162,9 @@ async function seedCase(
     trace: [],
     reviewHistory: [],
     learningRef: null,
+    email: null,
+    emailError: null,
+    supplements: overrides.supplements ?? {},
     version: 1,
   };
   await updateState((s) => ({ ...s, cases: [...s.cases, stored] }), { dataDir });
@@ -190,13 +193,15 @@ test("pipeline: stage ordering and persisted events for a happy path", async () 
     });
     const stages = events.map((e) => `${e.stage}:${e.status}`);
     assert.deepEqual(stages, [
-      "generating_email:started",
-      "generating_email:completed",
+      "reading_email:started",
+      "reading_email:completed",
+      "locating_account:started",
+      "locating_account:completed",
       "extracting_claims:started",
       "extracting_claims:completed",
       "retrieving_knowledge:started",
-      "checking_records:started",
       "retrieving_knowledge:completed",
+      "checking_records:started",
       "checking_records:completed",
       "evaluating_rules:started",
       "evaluating_rules:completed",
@@ -595,7 +600,7 @@ test("pipeline: persisted state file is updated after every event", async () => 
   });
 });
 
-test("pipeline: knowledge retrieval runs in parallel with checking_records (Promise.all ordering)", async () => {
+test("pipeline: retrieving_knowledge completes strictly before checking_records starts", async () => {
   await withTempStore(async (dataDir) => {
     const stored = await seedCase(dataDir);
     const fake = makeFakeLlm();
@@ -607,13 +612,179 @@ test("pipeline: knowledge retrieval runs in parallel with checking_records (Prom
     });
     const extractDoneIndex = events.findIndex((e) => e.stage === "extracting_claims" && e.status === "completed");
     const rkStartIndex = events.findIndex((e) => e.stage === "retrieving_knowledge" && e.status === "started");
-    const crStartIndex = events.findIndex((e) => e.stage === "checking_records" && e.status === "started");
     const rkDoneIndex = events.findIndex((e) => e.stage === "retrieving_knowledge" && e.status === "completed");
+    const crStartIndex = events.findIndex((e) => e.stage === "checking_records" && e.status === "started");
     const crDoneIndex = events.findIndex((e) => e.stage === "checking_records" && e.status === "completed");
     assert.ok(extractDoneIndex >= 0);
     assert.ok(rkStartIndex > extractDoneIndex);
-    assert.ok(crStartIndex > extractDoneIndex);
-    assert.ok(rkStartIndex < rkDoneIndex);
-    assert.ok(crStartIndex < crDoneIndex);
+    assert.ok(rkDoneIndex > rkStartIndex);
+    assert.ok(crStartIndex > rkDoneIndex, "checking_records must start after retrieving_knowledge completed");
+    assert.ok(crDoneIndex > crStartIndex);
+    const rkDone = events[rkDoneIndex]!;
+    const crStart = events[crStartIndex]!;
+    assert.ok(rkDone.sequence < crStart.sequence, "no parallel overlap between knowledge and records stages");
+  });
+});
+
+test("pipeline: supplements pre-set on the case remove matching missingFields", async () => {
+  await withTempStore(async (dataDir) => {
+    const stored = await seedCase(dataDir, {
+      supplements: { claimed_delay_minutes: "45" },
+    });
+    const fake = makeFakeLlm();
+    fake.setClaims(() => makeClaims({ missingFields: ["claimed_delay_minutes"] }));
+    const { events, state } = await collectEvents(stored.caseId, {
+      dataDir,
+      runId: "run-1",
+      indexPath: REPO_KNOWLEDGE_INDEX,
+      llm: fake.client,
+    });
+    assert.equal(
+      events.some((e) => e.stage === "drafting" && e.status === "started"),
+      true,
+      "supplemented claims must not short-circuit to follow-up",
+    );
+    const finalCase = state.cases.find((c) => c.caseId === stored.caseId);
+    assert.equal(finalCase?.state, "reviewable");
+    const reviewable = state.events.find(
+      (e) => e.caseId === stored.caseId && e.stage === "reviewable" && e.status === "completed",
+    );
+    const payload = reviewable?.payload as {
+      outcome?: string;
+      claims?: { missingFields?: string[]; claims?: Array<{ kind: string; value: number | null }> };
+    };
+    assert.equal(payload.outcome, "reviewable");
+    assert.deepEqual(payload.claims?.missingFields, []);
+    const supplemented = payload.claims?.claims?.find((c) => c.kind === "claimed_delay_minutes");
+    assert.ok(supplemented, "supplement merged into claims");
+    assert.equal(supplemented?.value, 45);
+  });
+});
+
+test("pipeline: resumeCase continues a follow-up case from evaluating_rules to reviewable", async () => {
+  await withTempStore(async (dataDir) => {
+    const stored = await seedCase(dataDir);
+    const fake = makeFakeLlm();
+    fake.setClaims(() => makeClaims({ missingFields: ["claimed_delay_minutes"] }));
+    const first = await collectEvents(stored.caseId, {
+      dataDir,
+      runId: "run-1",
+      indexPath: REPO_KNOWLEDGE_INDEX,
+      llm: fake.client,
+    });
+    const followUp = first.state.events.find(
+      (e) => e.caseId === stored.caseId && e.stage === "reviewable" && e.status === "completed",
+    );
+    assert.equal((followUp?.payload as { outcome?: string })?.outcome, "follow_up");
+    const beforeCase = first.state.cases.find((c) => c.caseId === stored.caseId);
+    assert.equal(beforeCase?.state, "reviewable");
+
+    const events: Array<{ stage: string; status: string; sequence: number }> = [];
+    for await (const ev of resumeCase(stored.caseId, { claimed_delay_minutes: "45" }, {
+      dataDir,
+      runId: "run-resume",
+      indexPath: REPO_KNOWLEDGE_INDEX,
+      llm: fake.client,
+    })) {
+      events.push({ stage: ev.stage, status: ev.status, sequence: ev.sequence });
+    }
+    const stages = events.map((e) => `${e.stage}:${e.status}`);
+    assert.equal(stages[0], "evaluating_rules:started", "resume starts at evaluating_rules");
+    assert.equal(stages.includes("reading_email:started"), false, "resume skips email stage");
+    assert.equal(stages.includes("locating_account:started"), false, "resume skips locate stage");
+    assert.equal(stages.includes("extracting_claims:started"), false, "resume skips claims stage");
+    assert.equal(stages.includes("retrieving_knowledge:started"), false, "resume skips knowledge stage");
+    assert.equal(stages.includes("checking_records:started"), false, "resume skips records stage");
+    assert.equal(stages[stages.length - 1], "reviewable:completed");
+    assert.ok(stages.includes("drafting:completed"), "resume drafts a decision");
+
+    const maxPriorSeq = Math.max(
+      ...first.state.events.filter((e) => e.caseId === stored.caseId).map((e) => e.sequence),
+    );
+    assert.ok(
+      events.every((e) => e.sequence > maxPriorSeq),
+      "resume sequences continue after the prior run",
+    );
+
+    const state = await readState({ dataDir });
+    const finalCase = state.cases.find((c) => c.caseId === stored.caseId);
+    assert.equal(finalCase?.state, "reviewable");
+    assert.deepEqual(finalCase?.supplements, { claimed_delay_minutes: "45" });
+    const reviewable = state.events
+      .filter((e) => e.caseId === stored.caseId && e.stage === "reviewable" && e.runId === "run-resume")
+      .at(-1);
+    const payload = reviewable?.payload as { outcome?: string; draft?: unknown };
+    assert.equal(payload.outcome, "reviewable");
+    assert.ok(payload.draft !== null && payload.draft !== undefined, "resume ends with a draft");
+  });
+});
+
+test("pipeline: resumeCase with answers covering all missing fields drafts a decision for an insufficient_information case", async () => {
+  await withTempStore(async (dataDir) => {
+    const stored = await seedCase(dataDir, { truthMode: "insufficient_information" });
+    const fake = makeFakeLlm();
+    fake.setClaims(() => makeClaims({ missingFields: ["claimed_delay_minutes"] }));
+    const first = await collectEvents(stored.caseId, {
+      dataDir,
+      runId: "run-1",
+      indexPath: REPO_KNOWLEDGE_INDEX,
+      llm: fake.client,
+    });
+    const followUp = first.state.events.find(
+      (e) => e.caseId === stored.caseId && e.stage === "reviewable" && e.status === "completed",
+    );
+    assert.equal((followUp?.payload as { outcome?: string })?.outcome, "follow_up");
+    const beforeCase = first.state.cases.find((c) => c.caseId === stored.caseId);
+    assert.equal(beforeCase?.state, "reviewable");
+
+    const events: Array<{ stage: string; status: string }> = [];
+    for await (const ev of resumeCase(stored.caseId, { claimed_delay_minutes: "45" }, {
+      dataDir,
+      runId: "run-resume",
+      indexPath: REPO_KNOWLEDGE_INDEX,
+      llm: fake.client,
+    })) {
+      events.push({ stage: ev.stage, status: ev.status });
+    }
+    const stages = events.map((e) => `${e.stage}:${e.status}`);
+    assert.equal(stages[0], "evaluating_rules:started", "resume starts at evaluating_rules");
+    assert.ok(stages.includes("drafting:completed"), "answering all missing fields must draft a decision");
+    assert.equal(stages[stages.length - 1], "reviewable:completed");
+
+    const state = await readState({ dataDir });
+    const finalCase = state.cases.find((c) => c.caseId === stored.caseId);
+    assert.equal(finalCase?.state, "reviewable");
+    const reviewable = state.events
+      .filter((e) => e.caseId === stored.caseId && e.stage === "reviewable" && e.runId === "run-resume")
+      .at(-1);
+    const payload = reviewable?.payload as { outcome?: string; draft?: unknown };
+    assert.equal(payload.outcome, "reviewable");
+    assert.ok(payload.draft !== null && payload.draft !== undefined, "resume ends with a draft");
+  });
+});
+
+test("pipeline: resumeCase on a non-follow-up case throws PipelineError invalid_state", async () => {
+  await withTempStore(async (dataDir) => {
+    const stored = await seedCase(dataDir);
+    const fake = makeFakeLlm();
+    await collectEvents(stored.caseId, {
+      dataDir,
+      runId: "run-1",
+      indexPath: REPO_KNOWLEDGE_INDEX,
+      llm: fake.client,
+    });
+    await assert.rejects(
+      async () => {
+        for await (const _ev of resumeCase(stored.caseId, { claimed_delay_minutes: "45" }, {
+          dataDir,
+          runId: "run-resume",
+          indexPath: REPO_KNOWLEDGE_INDEX,
+          llm: fake.client,
+        })) {
+          void _ev;
+        }
+      },
+      (err: unknown) => err instanceof PipelineError && err.code === "invalid_state",
+    );
   });
 });

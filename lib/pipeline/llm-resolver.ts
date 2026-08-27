@@ -10,12 +10,16 @@ import {
   extractCaseClaims,
   draftDecision,
   critiqueDecision,
+  streamGenerateCustomerEmail,
+  streamDraftDecision,
+  rewriteResponseText,
 } from "../llm/baml.ts";
 import type {
   GenerateEmailInput,
   ExtractClaimsInput,
   DraftDecisionInput,
   CritiqueDecisionInput,
+  RewriteTextInput,
 } from "../llm/baml.ts";
 
 const FAKE_EMAIL: EmailDraft = {
@@ -48,12 +52,62 @@ const FAKE_CRITIQUE: CritiqueReport = {
   correctedDraft: null,
 };
 
+const FAKE_OUTCOME_BAML: Record<DecisionDraft["outcome"], string> = {
+  refund: "Refund",
+  change: "Change",
+  follow_up: "FollowUp",
+  unsupported_or_escalate: "UnsupportedOrEscalate",
+  information: "Information",
+};
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function emitGrowingPartials(
+  text: string,
+  emit: (partial: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const steps = 5;
+  for (let step = 1; step <= steps; step += 1) {
+    if (signal?.aborted) throw new Error("aborted");
+    await delay(80);
+    if (signal?.aborted) throw new Error("aborted");
+    emit(text.slice(0, Math.max(1, Math.ceil((text.length * step) / steps))));
+  }
+}
+
 function makeFakeLlm(): LlmClient {
   return {
     generateCustomerEmail: async () => ({ ...FAKE_EMAIL }),
     extractCaseClaims: async () => ({ ...FAKE_CLAIMS }),
     draftDecision: async () => ({ ...FAKE_DRAFT }),
     critiqueDecision: async () => ({ ...FAKE_CRITIQUE }),
+    rewriteResponseText: async (input) => ({
+      rewrittenSelection: `[${input.instruction}] ${input.selection}`,
+    }),
+    streamGenerateCustomerEmail: async (_input, onPartial, signal) => {
+      await emitGrowingPartials(
+        FAKE_EMAIL.body,
+        (body) => onPartial({ subject: FAKE_EMAIL.subject, body }),
+        signal,
+      );
+      return { ...FAKE_EMAIL };
+    },
+    streamDraftDecision: async (_input, onPartial, signal) => {
+      await emitGrowingPartials(
+        FAKE_DRAFT.response,
+        (response) =>
+          onPartial({
+            response,
+            outcome: FAKE_OUTCOME_BAML[FAKE_DRAFT.outcome],
+            proposedAmount: FAKE_DRAFT.proposedAmount,
+          }),
+        signal,
+      );
+      return { ...FAKE_DRAFT };
+    },
   };
 }
 
@@ -63,6 +117,11 @@ function makeRealLlm(): LlmClient {
     extractCaseClaims: (input, signal) => extractCaseClaims(input, signal),
     draftDecision: (input, signal) => draftDecision(input, signal),
     critiqueDecision: (input, signal) => critiqueDecision(input, signal),
+    rewriteResponseText: (input, signal) => rewriteResponseText(input, signal),
+    streamGenerateCustomerEmail: (input, onPartial, signal) =>
+      streamGenerateCustomerEmail(input, onPartial, signal),
+    streamDraftDecision: (input, onPartial, signal) =>
+      streamDraftDecision(input, onPartial, signal),
   };
 }
 
@@ -87,4 +146,5 @@ export type {
   ExtractClaimsInput,
   DraftDecisionInput,
   CritiqueDecisionInput,
+  RewriteTextInput,
 };

@@ -38,6 +38,9 @@ function makeStoredCase(id: string): StoredCase {
     trace: [],
     reviewHistory: [],
     learningRef: null,
+    email: null,
+    emailError: null,
+    supplements: {},
     version: 1,
   };
 }
@@ -143,7 +146,31 @@ test("storage: schemaVersion is set after first write", async () => {
     resetState();
     await updateState((current) => ({ ...current, learning: [makeLearning()] }), { dataDir: dir });
     const raw = JSON.parse(readFileSync(join(dir, "state.json"), "utf8")) as { schemaVersion?: number };
-    assert.equal(raw.schemaVersion, 1);
+    assert.equal(raw.schemaVersion, 2);
+  });
+});
+
+test("storage: v1 state migrates to v2 with email/emailError/supplements defaults", async () => {
+  await withTempStore(async (dir) => {
+    const legacyCase = JSON.parse(JSON.stringify(makeStoredCase("case-v1"))) as Record<string, unknown>;
+    delete legacyCase.email;
+    delete legacyCase.emailError;
+    delete legacyCase.supplements;
+    const legacyState = {
+      schemaVersion: 1,
+      cases: [legacyCase],
+      events: [],
+      learning: [],
+    };
+    writeFileSync(join(dir, "state.json"), JSON.stringify(legacyState));
+    resetState();
+    const state = await readState({ dataDir: dir });
+    assert.equal(state.schemaVersion, 2);
+    const migrated = state.cases.find((c) => c.caseId === "case-v1");
+    assert.ok(migrated, "case survives the migration");
+    assert.equal(migrated?.email, null);
+    assert.equal(migrated?.emailError, null);
+    assert.deepEqual(migrated?.supplements, {});
   });
 });
 

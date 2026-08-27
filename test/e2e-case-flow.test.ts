@@ -123,6 +123,9 @@ async function seedCase(dataDir: string, pkg: DemoCasePackage): Promise<StoredCa
     trace: [],
     reviewHistory: [],
     learningRef: null,
+    email: null,
+    emailError: null,
+    supplements: {},
     version: 1,
   };
   await updateState((s) => ({ ...s, cases: [...s.cases, stored] }), { dataDir });
@@ -184,6 +187,26 @@ test("e2e: create, run, inspect, reject, revise once, retain learning and recomp
       runAEvents.every((e) => e.status !== "failed"),
       "no stage failed on the happy path",
     );
+    const stageOrder = runAEvents
+      .slice()
+      .sort((a, b) => a.sequence - b.sequence)
+      .map((e) => `${e.stage}:${e.status}`);
+    const readingDone = stageOrder.indexOf("reading_email:completed");
+    const locatingDone = stageOrder.indexOf("locating_account:completed");
+    const claimsStart = stageOrder.indexOf("extracting_claims:started");
+    assert.ok(readingDone >= 0, "reading_email stage ran");
+    assert.ok(locatingDone > readingDone, "locating_account runs after reading_email");
+    assert.ok(claimsStart > locatingDone, "claims extraction runs after locating_account");
+    assert.ok(
+      stageOrder.indexOf("retrieving_knowledge:completed") < stageOrder.indexOf("checking_records:started"),
+      "knowledge retrieval completes before record check starts",
+    );
+
+    assert.ok(ranA!.email !== null, "email is stored on the case during the run");
+    assert.equal(ranA!.email?.from, pkgA.account.email, "stored email comes from the passenger account");
+    assert.equal(ranA!.email?.subject, mockA.email.subject, "stored email subject matches the generated draft");
+    assert.equal(ranA!.email?.body, mockA.email.body, "stored email body matches the generated draft");
+    assert.deepEqual(ranA!.email?.mentionedFacts, mockA.email.mentionedFacts);
 
     const rejected = await reviewCase(
       {

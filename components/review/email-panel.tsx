@@ -1,95 +1,64 @@
 "use client";
 
 import React from "react";
-import { useEffect, useRef } from "react";
-import { Card, CardHeader, CardDescription, CardPanel, CardTitle } from "@/components/ui/card";
-import { Field, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectItem,
-  SelectPopup,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Shimmer } from "@/components/beui/atoms/Shimmer.tsx";
 import type { DecisionDraft, EmailDraft, ExtractedClaims } from "@/lib/llm/types.ts";
-import { cn } from "@/lib/utils";
+import { DraftEditor } from "./draft-editor.tsx";
+import {
+  formatDateTime,
+  formatEvidenceRef,
+  formatMoney,
+  humanize,
+  outcomeLabel,
+  requestedActionLabel,
+} from "./formatters.ts";
 
 export type EmailPanelProps = {
   email: EmailDraft;
-  claims: ExtractedClaims;
-  decision: DecisionDraft;
+  claims: ExtractedClaims | null;
+  decision: DecisionDraft | null;
   editing: boolean;
   editedDraft: DecisionDraft | null;
   onChangeEditedDraft: (next: DecisionDraft) => void;
+  account?: { fullName: string; email: string } | null;
+  from?: string;
+  receivedAt?: string | null;
+  emailStreaming?: boolean;
+  claimsStreaming?: boolean;
+  decisionStreaming?: boolean;
 };
 
-const OUTCOME_LABEL: Record<DecisionDraft["outcome"], string> = {
-  refund: "Refund",
-  change: "Change",
-  follow_up: "Follow-up",
-  unsupported_or_escalate: "Escalate",
-  information: "Information",
-};
-
-function readMs(name: string, fallback: number): number {
-  if (typeof window === "undefined") return fallback;
-  const v = parseFloat(
-    getComputedStyle(document.documentElement).getPropertyValue(name),
-  );
-  return Number.isFinite(v) ? v : fallback;
+function initialsOf(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  const first = parts[0]?.charAt(0) ?? "?";
+  const last = parts.length > 1 ? parts[parts.length - 1].charAt(0) : "";
+  return (first + last).toUpperCase();
 }
 
-function StreamingText({ text, className }: { text: string; className?: string }): React.JSX.Element {
-  const ref = useRef<HTMLDivElement>(null);
+function parseFrom(value: string): { name: string | null; address: string } {
+  const match = /^(.*?)\s*<([^>]+)>$/.exec(value.trim());
+  if (match) return { name: match[1].trim() || null, address: match[2].trim() };
+  return { name: null, address: value.trim() };
+}
 
-  useEffect(() => {
-    const block = ref.current;
-    if (!block) return;
-    if (
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches
-    ) {
-      return;
-    }
-    const words = text.trim().split(/\s+/);
-    block.textContent = "";
-    const spans = words.map((w, i) => {
-      const s = document.createElement("span");
-      s.className = "t-stream-w is-in";
-      s.textContent = w;
-      block.appendChild(s);
-      if (i < words.length - 1) block.appendChild(document.createTextNode(" "));
-      return s;
-    });
-    const gap = readMs("--stream-gap", 60);
-    let cancelled = false;
-    const timers: number[] = [];
-    spans.forEach((s) => {
-      s.style.transition = "none";
-      s.classList.remove("is-in");
-    });
-    void block.offsetWidth;
-    spans.forEach((s) => {
-      s.style.transition = "";
-    });
-    const next = (n: number) => {
-      if (cancelled || n >= spans.length) return;
-      spans[n].classList.add("is-in");
-      timers.push(window.setTimeout(() => next(n + 1), gap));
-    };
-    next(0);
-    return () => {
-      cancelled = true;
-      for (const t of timers) window.clearTimeout(t);
-    };
-  }, [text]);
+function StreamingCaret(): React.JSX.Element {
+  return <span aria-hidden="true" className="stream-caret is-streaming" />;
+}
 
+function FactChip({
+  refValue,
+  children,
+}: {
+  refValue?: string;
+  children: React.ReactNode;
+}): React.JSX.Element {
   return (
-    <div ref={ref} data-field="inbound-body" className={cn("t-stream whitespace-pre-wrap", className)}>
-      {text}
-    </div>
+    <span
+      data-record-ref={refValue}
+      className="inline-flex h-6 items-center rounded-full bg-inset px-2.5 text-[12px] font-medium text-ink-2"
+    >
+      {children}
+    </span>
   );
 }
 
@@ -100,123 +69,180 @@ export function EmailPanel({
   editing,
   editedDraft,
   onChangeEditedDraft,
+  account,
+  from,
+  receivedAt,
+  emailStreaming = false,
+  claimsStreaming = false,
+  decisionStreaming = false,
 }: EmailPanelProps): React.JSX.Element {
   const draft = editedDraft ?? decision;
+  const showDraft = decision !== null || editedDraft !== null;
+  const parsedFrom = from ? parseFrom(from) : null;
+  const fromName = parsedFrom ? parsedFrom.name : account ? account.fullName : null;
+  const fromAddress = parsedFrom
+    ? parsedFrom.address
+    : account
+      ? account.email
+      : "";
+  const fromInitials = parsedFrom
+    ? parsedFrom.name
+      ? initialsOf(parsedFrom.name)
+      : initialsOf(parsedFrom.address.split("@")[0] ?? "?")
+    : account
+      ? initialsOf(account.fullName)
+      : "?";
   return (
-    <Card data-component="email-panel" data-section="email">
-      <CardHeader>
-        <CardTitle>Email</CardTitle>
-        <CardDescription>Inbound message, extracted claims, and the draft response.</CardDescription>
-      </CardHeader>
-      <CardPanel className="grid gap-4">
-        <article data-field="inbound" aria-label="Inbound email" className="grid gap-2">
-          <h3 className="m-0 text-sm font-medium">Inbound email (read-only)</h3>
-          <p data-field="inbound-subject" className="m-0 font-bold">
-            {email.subject}
-          </p>
-          <div
-            className="rounded-md border p-3"
-            style={{ background: "var(--surface-sunken)" }}
-          >
-            <StreamingText text={email.body} className="font-sans text-sm" />
+    <section
+      data-component="email-panel"
+      data-section="email"
+      aria-label="Inbound email"
+      className="overflow-hidden rounded-card bg-surface shadow-card"
+    >
+      <div data-field="inbound" className="grid gap-3 p-4">
+        {parsedFrom || account ? (
+          <div className="flex items-start gap-3">
+            <span
+              aria-hidden
+              className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent-tint font-display text-[12px] font-semibold text-accent-ink"
+            >
+              {fromInitials}
+            </span>
+            <div className="grid min-w-0 flex-1 gap-px text-[13px]">
+              <p className="m-0 truncate">
+                <span className="text-ink-3">From:</span>{" "}
+                <span className="font-medium text-ink">{fromName ?? fromAddress}</span>{" "}
+                {fromName ? (
+                  <span className="font-mono text-[12px] text-ink-3">&lt;{fromAddress}&gt;</span>
+                ) : null}
+              </p>
+              <p className="m-0 truncate">
+                <span className="text-ink-3">To:</span>{" "}
+                <span className="text-ink-2">support@koleo.pl</span>
+              </p>
+            </div>
+            {receivedAt ? (
+              <time className="shrink-0 font-mono text-[11.5px] tabular-nums text-ink-3">
+                {formatDateTime(receivedAt)}
+              </time>
+            ) : null}
           </div>
-          {email.mentionedFacts.length > 0 ? (
-            <p data-field="mentioned-facts" className="m-0">
-              Mentioned:{" "}
-              {email.mentionedFacts.map((f) => (
-                <code key={f} data-record-ref={f} className="me-2 font-mono text-xs">
-                  {f}
-                </code>
-              ))}
+        ) : null}
+        <h2 data-field="inbound-subject" className="m-0 font-display text-[15px] font-semibold text-ink">
+          {email.subject}
+        </h2>
+        <div
+          aria-busy={emailStreaming || undefined}
+          className="rounded-control bg-inset px-3 py-2.5"
+        >
+          {emailStreaming && email.body.length === 0 ? (
+            <p data-field="inbound-body" role="status" className="m-0 text-[13px] leading-relaxed">
+              <Shimmer>Reading the email…</Shimmer>
             </p>
-          ) : null}
-        </article>
-        <article data-field="claims" aria-label="Extracted claims" className="grid gap-2">
-          <h3 className="m-0 text-sm font-medium">Extracted claims</h3>
-          <ul className="m-0 grid gap-1 ps-4">
-            {claims.claims.map((c, i) => (
-              <li
-                key={i}
-                data-record-ref={c.ticketNumber ? `record:ticket:${c.ticketNumber}` : undefined}
-              >
-                <strong>{c.kind}:</strong> {c.description}
-                {c.value !== null && c.value !== undefined ? <> (value={String(c.value)})</> : null}
-              </li>
+          ) : (
+            <p data-field="inbound-body" className="m-0 text-[13px] leading-relaxed whitespace-pre-wrap text-ink-2">
+              {email.body}
+              {emailStreaming ? <StreamingCaret /> : null}
+            </p>
+          )}
+        </div>
+        {email.mentionedFacts.length > 0 ? (
+          <div data-field="mentioned-facts" className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[12px] font-medium text-ink-3">Mentions</span>
+            {email.mentionedFacts.map((fact) => (
+              <FactChip key={fact} refValue={fact}>
+                {formatEvidenceRef(fact)}
+              </FactChip>
             ))}
-          </ul>
-          {claims.missingFields.length > 0 ? (
-            <p data-field="missing-fields-inline" className="m-0">
-              Missing: {claims.missingFields.join(", ")}
+          </div>
+        ) : null}
+      </div>
+
+      <div data-field="claims" aria-label="What the passenger wants" className="border-t border-line bg-inset/40 p-4">
+        <h3 className="m-0 text-[11px] font-semibold tracking-wide text-ink-3 uppercase">
+          What they want
+        </h3>
+        {claims ? (
+          <div className="enter-fade-up mt-2 grid gap-2">
+            <p className="m-0">
+              <span
+                data-field="requested-action"
+                className="inline-flex h-6 items-center rounded-full bg-accent-tint px-2.5 text-[12px] font-medium text-accent-ink"
+              >
+                {requestedActionLabel(claims.requestedAction)}
+              </span>
             </p>
-          ) : null}
-        </article>
-        <article data-field="draft-response" aria-label="Draft response" className="grid gap-2">
-          <h3 className="m-0 text-sm font-medium">
+            {claims.claims.length > 0 ? (
+              <ul className="m-0 grid list-none gap-1 p-0">
+                {claims.claims.map((claim, i) => (
+                  <li
+                    key={i}
+                    data-record-ref={claim.ticketNumber ? `record:ticket:${claim.ticketNumber}` : undefined}
+                    className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-ink-2"
+                  >
+                    <span aria-hidden className="size-1 shrink-0 rounded-full bg-line-strong" />
+                    <span className="min-w-0 flex-1">{claim.description}</span>
+                    {claim.kind ? (
+                      <span className="font-mono text-[11px] text-ink-3">{humanize(claim.kind)}</span>
+                    ) : null}
+                    {claim.ticketNumber ? (
+                      <FactChip refValue={`record:ticket:${claim.ticketNumber}`}>
+                        Ticket {claim.ticketNumber}
+                      </FactChip>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {claims.referencedStations.length > 0 ? (
+              <p className="m-0 flex flex-wrap items-center gap-1.5">
+                <FactChip>{claims.referencedStations.join(" → ")}</FactChip>
+              </p>
+            ) : null}
+            {claims.missingFields.length > 0 ? (
+              <p data-field="missing-fields-inline" className="m-0 text-[12.5px] text-ink-3">
+                Still needed: {claims.missingFields.map(humanize).join(", ")}
+              </p>
+            ) : null}
+          </div>
+        ) : claimsStreaming ? (
+          <p className="mt-2 m-0 text-[13px]" role="status">
+            <Shimmer>Reading the message…</Shimmer>
+          </p>
+        ) : (
+          <p className="mt-2 m-0 text-[13px] text-ink-3">No claims extracted yet.</p>
+        )}
+      </div>
+
+      {showDraft ? (
+        <div data-field="draft-response" aria-label="Draft response" className="grid gap-2 border-t border-line p-4">
+          <h3 className="m-0 text-[11px] font-semibold tracking-wide text-ink-3 uppercase">
             {editing ? "Draft response (editing)" : "Draft response"}
           </h3>
-          {editing ? (
-            <div className="grid gap-3">
-              <Field>
-                <FieldLabel>Outcome</FieldLabel>
-                <Select
-                  value={draft.outcome}
-                  onValueChange={(v) =>
-                    onChangeEditedDraft({ ...draft, outcome: v as DecisionDraft["outcome"] })
-                  }
-                >
-                  <SelectTrigger data-field="draft-outcome">
-                    <SelectValue>{OUTCOME_LABEL[draft.outcome]}</SelectValue>
-                  </SelectTrigger>
-                  <SelectPopup>
-                    <SelectItem value="refund">Refund</SelectItem>
-                    <SelectItem value="change">Change</SelectItem>
-                    <SelectItem value="follow_up">Follow-up</SelectItem>
-                    <SelectItem value="unsupported_or_escalate">Escalate</SelectItem>
-                    <SelectItem value="information">Information</SelectItem>
-                  </SelectPopup>
-                </Select>
-              </Field>
-              <Field>
-                <FieldLabel>Proposed amount</FieldLabel>
-                <Input
-                  data-field="draft-amount"
-                  type="number"
-                  inputMode="decimal"
-                  nativeInput
-                  value={draft.proposedAmount ?? ""}
-                  onChange={(e) => {
-                    const raw = e.currentTarget.value;
-                    const next = raw === "" ? null : Number(raw);
-                    onChangeEditedDraft({
-                      ...draft,
-                      proposedAmount: next !== null && Number.isFinite(next) ? next : null,
-                    });
-                  }}
-                />
-              </Field>
-              <Field>
-                <FieldLabel>Response text</FieldLabel>
-                <Textarea
-                  data-field="draft-response-text"
-                  value={draft.response}
-                  onChange={(e) => onChangeEditedDraft({ ...draft, response: e.currentTarget.value })}
-                  rows={6}
-                />
-              </Field>
-            </div>
-          ) : (
+          {editing && draft ? (
+            <DraftEditor draft={draft} onChange={onChangeEditedDraft} />
+          ) : decision ? (
             <div className="grid gap-1">
-              <p className="m-0 text-xs" style={{ color: "var(--text-muted)" }}>
-                {OUTCOME_LABEL[draft.outcome]}
-                {draft.proposedAmount !== null ? ` · ${draft.proposedAmount}` : ""}
+              <p className="m-0 text-[12px] text-ink-3">
+                {outcomeLabel(decision.outcome)}
+                {decision.proposedAmount !== null
+                  ? ` · ${formatMoney(decision.proposedAmount)}`
+                  : ""}
               </p>
-              <p data-field="draft-response-text" className="m-0 whitespace-pre-wrap">
-                {draft.response}
+              <p data-field="draft-response-text" className="m-0 text-[13px] leading-relaxed whitespace-pre-wrap">
+                {decision.response}
+                {decisionStreaming ? <StreamingCaret /> : null}
               </p>
             </div>
+          ) : decisionStreaming ? (
+            <p className="m-0 text-[13px]" role="status">
+              <Shimmer>Drafting the reply…</Shimmer>
+            </p>
+          ) : (
+            <p className="m-0 text-[13px] text-ink-3">No draft response yet.</p>
           )}
-        </article>
-      </CardPanel>
-    </Card>
+        </div>
+      ) : null}
+    </section>
   );
 }

@@ -6,6 +6,7 @@ import {
   extractCaseClaims,
   draftDecision,
   critiqueDecision,
+  rewriteResponseText,
   setBamlClientForTesting,
   resetBamlClientForTesting,
   LlmError,
@@ -39,11 +40,15 @@ function makeRawCaller(overrides: Partial<RawBamlCaller> = {}): RawBamlCaller {
     findings: [],
     correctedDraft: null,
   };
+  const rewrite = {
+    rewrittenSelection: "Rewritten selection text.",
+  };
   return {
     GenerateCustomerEmail: overrides.GenerateCustomerEmail ?? (async () => emailDraft),
     ExtractCaseClaims: overrides.ExtractCaseClaims ?? (async () => claims),
     DraftDecision: overrides.DraftDecision ?? (async () => decision),
     CritiqueDecision: overrides.CritiqueDecision ?? (async () => critique),
+    RewriteResponseText: overrides.RewriteResponseText ?? (async () => rewrite),
   };
 }
 
@@ -89,6 +94,46 @@ test("baml: critiqueDecision returns typed critique through raw mock caller", as
   assert.equal(report.passed, true);
   assert.ok(Array.isArray(report.findings));
   assert.equal(report.correctedDraft, null);
+});
+
+test("baml: rewriteResponseText returns typed result through raw mock caller", async () => {
+  let seenInput: { selection?: string; instruction?: string; contextJson?: string } = {};
+  setBamlClientForTesting(
+    makeRawCaller({
+      RewriteResponseText: async (input) => {
+        seenInput = input;
+        return { rewrittenSelection: `Shortened: ${input.selection}` };
+      },
+    }),
+  );
+  const result = await rewriteResponseText(
+    {
+      selection: "the refund amount",
+      instruction: "Shorten",
+      contextJson: JSON.stringify({ response: "draft" }),
+    },
+    new AbortController().signal,
+  );
+  assert.equal(result.rewrittenSelection, "Shortened: the refund amount");
+  assert.equal(seenInput.selection, "the refund amount");
+  assert.equal(seenInput.instruction, "Shorten");
+  assert.equal(typeof seenInput.contextJson, "string");
+});
+
+test("baml: rewriteResponseText with empty rewrittenSelection is rejected as LlmError", async () => {
+  setBamlClientForTesting(
+    makeRawCaller({
+      RewriteResponseText: async () => ({ rewrittenSelection: "" }),
+    }),
+  );
+  await assert.rejects(
+    () =>
+      rewriteResponseText(
+        { selection: "x", instruction: "Shorten", contextJson: "{}" },
+        new AbortController().signal,
+      ),
+    (err: unknown) => err instanceof LlmError && err.code === "invalid_shape",
+  );
 });
 
 test("baml: empty evidenceRefs is surfaced as LlmError", async () => {

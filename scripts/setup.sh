@@ -222,15 +222,21 @@ else
   fi
   if [ -n "$(env_value PLK_API_KEY)" ]; then
     ok "kept existing PLK_API_KEY in $ENV_FILE"
-  elif confirm "Configure live PLK route data? (needs PLK_API_KEY; 'no' uses deterministic cassettes)"; then
-    printf '  %sPaste your PLK API key (input hidden):%s ' "$BOLD" "$RESET"
-    plk_input=""
-    read -rs plk_input || true
-    printf '\n'
-    if [ -n "$plk_input" ]; then env_upsert PLK_API_KEY "$plk_input"; else warn "empty PLK_API_KEY — continuing with cassettes"; fi
-    plk_input=""
   else
-    ok "PLK_API_KEY skipped — deterministic cassettes under cassettes/plk/ will be used"
+    say "Live PLK route data requires a PLK API key:"
+    say "  - API portal: https://pdp-api.plk-sa.pl/"
+    say "  - Request a key using the form attached there; requests are reviewed in 3-5 days."
+    say "  - No key yet? Answer 'no' now and re-run this wizard once it arrives."
+    if confirm "Configure live PLK route data? (needs PLK_API_KEY; 'no' uses deterministic cassettes)"; then
+      printf '  %sPaste your PLK API key (input hidden):%s ' "$BOLD" "$RESET"
+      plk_input=""
+      read -rs plk_input || true
+      printf '\n'
+      if [ -n "$plk_input" ]; then env_upsert PLK_API_KEY "$plk_input"; else warn "empty PLK_API_KEY — continuing with cassettes"; fi
+      plk_input=""
+    else
+      ok "PLK_API_KEY skipped — deterministic cassettes under cassettes/plk/ will be used"
+    fi
   fi
 fi
 

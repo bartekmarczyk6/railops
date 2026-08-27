@@ -1,83 +1,63 @@
 import React from "react";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardHeader, CardPanel, CardTitle } from "@/components/ui/card";
-import type { StoredCase } from "@/lib/storage/types.ts";
+import { StatusPill } from "@/components/beui/atoms/StatusPill.tsx";
+import { topicLabel, truthModeLabel } from "@/components/cases/case-list.tsx";
+import type { CaseState, StoredCase } from "@/lib/storage/types.ts";
+import { formatDateTime } from "./formatters.ts";
 
 export type CaseHeaderProps = {
   caseData: StoredCase;
 };
 
-const STATE_LABEL: Record<StoredCase["state"], string> = {
-  created: "Created",
-  running: "Running",
-  reviewable: "Reviewable",
-  approved: "Approved",
-  rejected: "Rejected",
-  escalated: "Escalated",
-  revising: "Revising",
-  learning_saved: "Learning saved",
-  error: "Error",
-};
-
-const STATE_BADGE_VARIANT: Record<StoredCase["state"], "success" | "error" | "warning" | "info" | "secondary"> = {
-  created: "secondary",
-  running: "warning",
-  reviewable: "info",
-  approved: "success",
-  rejected: "error",
-  escalated: "warning",
-  revising: "info",
-  learning_saved: "success",
-  error: "error",
+const STATE_PILL: Record<CaseState, { tone: "green" | "orange" | "red" | "accent" | "neutral"; label: string }> = {
+  created: { tone: "neutral", label: "Queued" },
+  running: { tone: "accent", label: "Agent working" },
+  reviewable: { tone: "accent", label: "Ready for your review" },
+  approved: { tone: "green", label: "Approved" },
+  rejected: { tone: "red", label: "Rejected" },
+  escalated: { tone: "orange", label: "Escalated" },
+  revising: { tone: "orange", label: "Revised draft" },
+  learning_saved: { tone: "green", label: "Learning saved" },
+  error: { tone: "red", label: "Run failed" },
 };
 
 export function CaseHeader({ caseData }: CaseHeaderProps): React.JSX.Element {
+  const state = STATE_PILL[caseData.state];
   return (
-    <Card data-component="case-header" data-section="header">
-      <CardHeader>
-        <CardTitle className="flex flex-wrap items-center gap-2">
-          <Badge
-            data-badge="synthetic"
-            className="uppercase tracking-wide"
-            style={{ background: "var(--fixture)", color: "#ffffff" }}
-          >
-            Synthetic data
-          </Badge>
-          <span data-field="topic">{caseData.topic.replaceAll("_", " ")}</span>
-        </CardTitle>
-      </CardHeader>
-      <CardPanel>
-        <dl className="m-0 grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(180px,1fr))]">
-          <div>
-            <dt className="text-xs" style={{ color: "var(--text-muted)" }}>Case ID</dt>
-            <dd data-field="case-id" className="m-0 font-mono text-sm">
-              {caseData.caseId}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-xs" style={{ color: "var(--text-muted)" }}>Truth mode</dt>
-            <dd data-field="truth-mode" className="m-0">
-              {caseData.truthMode.replaceAll("_", " ")}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-xs" style={{ color: "var(--text-muted)" }}>State</dt>
-            <dd data-field="state" className="m-0">
-              <Badge variant={STATE_BADGE_VARIANT[caseData.state]} data-state-badge={caseData.state}>
-                {STATE_LABEL[caseData.state]}
-              </Badge>
-            </dd>
-          </div>
-          <div>
-            <dt className="text-xs" style={{ color: "var(--text-muted)" }}>Seed</dt>
-            <dd data-field="seed" className="m-0">{caseData.seed}</dd>
-          </div>
-          <div>
-            <dt className="text-xs" style={{ color: "var(--text-muted)" }}>Version</dt>
-            <dd data-field="version" className="m-0">{caseData.version}</dd>
-          </div>
-        </dl>
-      </CardPanel>
-    </Card>
+    <header
+      data-component="case-header"
+      data-section="header"
+      className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-card bg-surface px-4 py-3 shadow-card"
+    >
+      <span
+        data-badge="synthetic"
+        className="inline-flex h-6 items-center gap-1.5 rounded-full bg-accent-tint px-2.5 text-[12px] font-medium text-accent-ink"
+      >
+        <span aria-hidden className="size-1.5 rounded-full bg-(--accent)" />
+        Synthetic data
+      </span>
+      <span data-field="case-id" className="max-w-40 truncate font-mono text-[12px] text-ink-3">
+        {caseData.caseId}
+      </span>
+      <span aria-hidden className="hidden h-4 w-px bg-line-strong sm:block" />
+      <h1 data-field="topic" className="font-display text-[15px] font-semibold text-ink">
+        {topicLabel(caseData.topic)}
+      </h1>
+      <span
+        data-field="truth-mode"
+        aria-label="Scenario"
+        className="inline-flex h-6 items-center rounded-full bg-inset px-2.5 text-[12px] font-medium text-ink-2"
+      >
+        Scenario: {truthModeLabel(caseData.truthMode)}
+      </span>
+      <span data-field="state" data-state-badge={caseData.state} className="contents">
+        <StatusPill tone={state.tone}>{state.label}</StatusPill>
+      </span>
+      <time
+        data-field="created-at"
+        className="ms-auto font-mono text-[12px] tabular-nums text-ink-3"
+      >
+        {formatDateTime(caseData.createdAt)}
+      </time>
+    </header>
   );
 }
