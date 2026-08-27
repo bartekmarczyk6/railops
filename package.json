@@ -8,8 +8,9 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test",
-    "test:memory": "tsx --test test/memory.test.ts",
+    "test": "tsx --tsconfig tsconfig.test.json --test \"test/**/*.test.{ts,tsx}\"",
+    "test:memory": "tsx --tsconfig tsconfig.test.json --test test/memory.test.ts",
+    "test:page": "tsx --tsconfig tsconfig.test.json --test test/page-cases.test.tsx",
     "memory:init": "tsx scripts/init-memory.ts",
     "baml:generate": "baml-cli generate",
     "knowledge:index": "tsx scripts/build-knowledge-index.ts"
