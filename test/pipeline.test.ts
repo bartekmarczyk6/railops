@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -575,7 +575,7 @@ test("reviewCase: second edit throws MaxRevisionsReached", async () => {
   });
 });
 
-test("pipeline: persisted state file is updated after every event", async () => {
+test("pipeline: store is updated after every event", async () => {
   await withTempStore(async (dataDir) => {
     const stored = await seedCase(dataDir);
     const fake = makeFakeLlm();
@@ -588,15 +588,17 @@ test("pipeline: persisted state file is updated after every event", async () => 
       llm: fake.client,
     })) {
       count += 1;
-      const raw = readFileSync(join(dataDir, "state.json"), "utf8");
-      const parsed = JSON.parse(raw) as { events: Array<{ caseId: string; runId: string }> };
-      const matching = parsed.events.filter((e) => e.caseId === stored.caseId && e.runId === "run-1");
+      const snapshot = await readState({ dataDir });
+      const matching = snapshot.events.filter((e) => e.caseId === stored.caseId && e.runId === "run-1");
       seen.push(matching.length);
     }
     assert.equal(count, seen.length);
     for (let i = 0; i < seen.length; i += 1) {
-      assert.ok(seen[i]! >= i + 1, `event ${i} persisted before yield (saw ${seen[i]!})`);
+      assert.ok(seen[i]! >= i + 1, `event ${i} stored before yield (saw ${seen[i]!})`);
     }
+    const final = await readState({ dataDir });
+    const finalCase = final.cases.find((c) => c.caseId === stored.caseId);
+    assert.equal(finalCase?.state, "reviewable");
   });
 });
 

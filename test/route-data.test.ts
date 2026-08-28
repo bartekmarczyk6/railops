@@ -298,7 +298,7 @@ test("cassettes under cassettes/plk/: at least 3 synthetic fixtures exist with d
 test("record-plk-cassette script: explicit dry-run mode makes no live calls", async () => {
   const { spawnSync } = await import("node:child_process");
   const result = spawnSync(
-    "node",
+    process.execPath,
     ["--import", "tsx", "scripts/record-plk-cassette.ts", "--dry-run", "--origin", "Warszawa Centralna", "--destination", "Krakow Glowny", "--date", "2026-09-01"],
     {
       cwd: repoRoot,
@@ -314,7 +314,7 @@ test("record-plk-cassette script: explicit dry-run mode makes no live calls", as
 test("record-plk-cassette script: dry-run is default and succeeds even when PLK_API_KEY is set", async () => {
   const { spawnSync } = await import("node:child_process");
   const result = spawnSync(
-    "node",
+    process.execPath,
     ["--import", "tsx", "scripts/record-plk-cassette.ts", "--origin", "Warszawa Centralna", "--destination", "Krakow Glowny", "--date", "2026-09-01"],
     {
       cwd: repoRoot,
@@ -330,7 +330,7 @@ test("record-plk-cassette script: dry-run is default and succeeds even when PLK_
 test("record-plk-cassette script: refuses to apply without PLK_API_KEY even with --apply", async () => {
   const { spawnSync } = await import("node:child_process");
   const result = spawnSync(
-    "node",
+    process.execPath,
     ["--import", "tsx", "scripts/record-plk-cassette.ts", "--apply", "--origin", "Warszawa Centralna", "--destination", "Krakow Glowny", "--date", "2026-09-01"],
     {
       cwd: repoRoot,
@@ -345,7 +345,7 @@ test("record-plk-cassette script: refuses to apply without PLK_API_KEY even with
 test("record-plk-cassette script: refuses to apply with empty/whitespace PLK_API_KEY", async () => {
   const { spawnSync } = await import("node:child_process");
   const result = spawnSync(
-    "node",
+    process.execPath,
     ["--import", "tsx", "scripts/record-plk-cassette.ts", "--apply", "--origin", "Warszawa Centralna", "--destination", "Krakow Glowny", "--date", "2026-09-01"],
     {
       cwd: repoRoot,

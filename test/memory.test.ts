@@ -397,13 +397,12 @@ test("recallReviewerContext never treats memory as evidence: source field is the
 test("init-memory script --dry-run makes no network calls and exits 0", async () => {
   const { spawnSync } = await import("node:child_process");
   const result = spawnSync(
-    "npx",
-    ["--no-install", "tsx", "scripts/init-memory.ts", "--dry-run"],
+    process.execPath,
+    [join("node_modules", "tsx", "dist", "cli.mjs"), "scripts/init-memory.ts", "--dry-run"],
     {
       cwd: process.cwd(),
       env: { ...process.env, HINDSIGHT_API_URL: "" },
       encoding: "utf8",
-      shell: process.platform === "win32",
     },
   );
   assert.equal(result.status, 0, `dry-run exited non-zero: ${result.stderr}`);

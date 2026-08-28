@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { delimiter, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -43,6 +43,12 @@ function pwshAvailable(): boolean {
   } catch {
     return false;
   }
+}
+
+function envWithNodeOnPath(): NodeJS.ProcessEnv {
+  const nodeDir = dirname(process.execPath);
+  const pathKey = Object.keys(process.env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
+  return { ...process.env, [pathKey]: `${nodeDir}${delimiter}${process.env[pathKey] ?? ""}` };
 }
 
 test("wizard: setup.sh declares a bash shebang and strict mode", async () => {
@@ -179,6 +185,7 @@ test(
       cwd: repoRoot,
       stdio: "pipe",
       timeout: 120_000,
+      env: envWithNodeOnPath(),
     });
   },
 );
@@ -192,6 +199,7 @@ test(
       cwd: repoRoot,
       stdio: "pipe",
       timeout: 180_000,
+      env: envWithNodeOnPath(),
     });
   },
 );
