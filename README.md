@@ -32,7 +32,7 @@ the same ground truth, so the pipeline's behavior can be tested and scored.
 
 ## Try the live demo
 
-**https://railops-demo.vercel.app**
+**https://railops-demo-lyart.vercel.app**
 
 - **Create a case.** Pick a topic (delay refund, missed connection, ticket
   change…) and a truth mode — whether the records support the passenger's
