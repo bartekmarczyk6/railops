@@ -5,7 +5,10 @@ import type { TraceEvent } from "@/lib/storage/types.ts";
 
 export type CaseRunStatus = "idle" | "running" | "done" | "error";
 
-export type CaseRunBody = { answers: Record<string, string> };
+export type CaseRunBody = {
+  message?: string;
+  answers?: Record<string, string>;
+};
 
 export type CaseRunState = {
   status: CaseRunStatus;

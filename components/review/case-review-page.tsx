@@ -308,6 +308,18 @@ export function CaseReviewPage(props: CaseReviewPageProps): React.JSX.Element {
     latestReviewablePayload?.outcome === "follow_up";
   const followUpFields = useMemo<string[]>(() => {
     if (!isFollowUpCase) return [];
+    const payload = latestReviewablePayload as
+      | (ReviewablePayload & {
+          followUp?: { requestedFields?: unknown };
+        })
+      | null;
+    const requested = payload?.followUp?.requestedFields;
+    if (Array.isArray(requested)) {
+      const fields = requested.filter(
+        (f): f is string => typeof f === "string" && f.trim().length > 0,
+      );
+      if (fields.length > 0) return fields;
+    }
     const payloadClaims = latestReviewablePayload?.claims;
     if (
       payloadClaims &&
@@ -325,12 +337,27 @@ export function CaseReviewPage(props: CaseReviewPageProps): React.JSX.Element {
     () => buildFollowUpQuestions(followUpFields, caseData.pkg),
     [followUpFields, caseData.pkg],
   );
+  const followUpMessage = useMemo<string | undefined>(() => {
+    if (!isFollowUpCase) return undefined;
+    const payload = latestReviewablePayload as
+      | (ReviewablePayload & { followUp?: { message?: unknown } })
+      | null;
+    const message = payload?.followUp?.message;
+    if (typeof message !== "string" || message.trim().length === 0) return undefined;
+    return message;
+  }, [isFollowUpCase, latestReviewablePayload]);
   const showFollowUpCard =
     isFollowUpCase && !followUpDismissed && followUpQuestions.length > 0;
 
-  const submitFollowUp = (answers: Record<string, string>): void => {
+  const submitFollowUp = (input: {
+    answers?: Record<string, string>;
+    message?: string;
+  }): void => {
     setFollowUpDismissed(true);
-    run.start({ answers });
+    const payload: { answers?: Record<string, string>; message?: string } = {};
+    if (input.answers) payload.answers = input.answers;
+    if (input.message) payload.message = input.message;
+    run.start(payload);
   };
 
   const currency = caseData.pkg.tickets[0]?.currency ?? "PLN";
@@ -437,6 +464,7 @@ export function CaseReviewPage(props: CaseReviewPageProps): React.JSX.Element {
             <FollowUpCard
               key={latestReviewableEventId}
               questions={followUpQuestions}
+              message={followUpMessage}
               busy={run.status === "running"}
               onSubmit={submitFollowUp}
             />

@@ -23,9 +23,15 @@ export type FollowUpQuestion = {
   options: string[];
 };
 
+export type FollowUpSubmission = {
+  answers?: Record<string, string>;
+  message?: string;
+};
+
 export type FollowUpCardProps = {
   questions: FollowUpQuestion[];
-  onSubmit: (answers: Record<string, string>) => void;
+  message?: string;
+  onSubmit: (input: FollowUpSubmission) => void;
   busy?: boolean;
 };
 
@@ -159,12 +165,14 @@ export function buildFollowUpQuestions(
 
 export function FollowUpCard({
   questions,
+  message,
   onSubmit,
   busy = false,
 }: FollowUpCardProps): React.JSX.Element | null {
   const [qi, setQi] = useState(0);
   const [answers, setAnswers] = useState<Record<number, number[]>>({});
   const [custom, setCustom] = useState<Record<number, string>>({});
+  const [reply, setReply] = useState("");
 
   const advanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const questionRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -173,6 +181,8 @@ export function FollowUpCard({
   answersRef.current = answers;
   const customRef = useRef(custom);
   customRef.current = custom;
+  const replyRef = useRef(reply);
+  replyRef.current = reply;
   const [viewportH, setViewportH] = useState<number | undefined>(undefined);
   const [trackY, setTrackY] = useState(0);
   const [animate, setAnimate] = useState(false);
@@ -181,6 +191,9 @@ export function FollowUpCard({
   const last = qi >= count - 1;
   const selected = answers[qi] ?? [];
   const hasAnswer = selected.length > 0 || Boolean(custom[qi]?.trim());
+  const trimmedReply = reply.trim();
+  const canReply = trimmedReply.length > 0;
+  const canContinue = hasAnswer || canReply;
 
   const sync = (withAnim: boolean) => {
     const item = questionRefs.current[qi];
@@ -213,13 +226,20 @@ export function FollowUpCard({
     setQi(Math.min(Math.max(next, 0), count - 1));
   };
 
-  const send = () => {
+  const sendAnswers = () => {
     if (advanceTimer.current) clearTimeout(advanceTimer.current);
-    onSubmit(buildFollowUpAnswers(questions, answersRef.current, customRef.current));
+    const structured = buildFollowUpAnswers(questions, answersRef.current, customRef.current);
+    onSubmit({ answers: structured });
+  };
+
+  const sendReply = () => {
+    if (advanceTimer.current) clearTimeout(advanceTimer.current);
+    onSubmit({ message: replyRef.current.trim() });
+    setReply("");
   };
 
   const advance = () => {
-    if (last) send();
+    if (last) sendAnswers();
     else goTo(qi + 1);
   };
 
@@ -238,7 +258,7 @@ export function FollowUpCard({
       setCustom((current) => ({ ...current, [qi]: "" }));
       if (advanceTimer.current) clearTimeout(advanceTimer.current);
       advanceTimer.current = setTimeout(() => {
-        if (last) send();
+        if (last) sendAnswers();
         else setQi((current) => Math.min(count - 1, current + 1));
       }, 480);
     }
@@ -258,6 +278,16 @@ export function FollowUpCard({
           Some details are missing from the claim — answer what you can and the agent picks the case back up.
         </p>
       </div>
+      {message && message.trim().length > 0 ? (
+        <div
+          data-field="agent-message"
+          className="border-b border-line bg-inset/40 px-4 py-2.5 text-[13px] leading-relaxed text-ink-2"
+          role="status"
+          aria-live="polite"
+        >
+          {message}
+        </div>
+      ) : null}
       <div className="p-4">
         <div
           className="overflow-hidden"
@@ -374,13 +404,57 @@ export function FollowUpCard({
         </div>
 
         <div className="-mr-0.5 flex items-center gap-1.5">
-          <Button variant="ghost" size="sm" data-action="follow-up-skip" disabled={busy} onClick={send}>
+          <Button
+            variant="ghost"
+            size="sm"
+            data-action="follow-up-skip"
+            disabled={busy || !canContinue}
+            onClick={sendAnswers}
+          >
             Skip
           </Button>
-          <Button variant="accent" size="sm" data-action="follow-up-continue" disabled={!hasAnswer || busy} onClick={advance}>
+          <Button
+            variant="ghost"
+            size="sm"
+            data-action="follow-up-reply"
+            disabled={busy || !canReply}
+            onClick={sendReply}
+          >
+            Reply to agent
+          </Button>
+          <Button
+            variant="accent"
+            size="sm"
+            data-action="follow-up-continue"
+            disabled={!canContinue || busy}
+            onClick={advance}
+          >
             {last ? "Send" : "Continue"}
           </Button>
         </div>
+      </div>
+      <div className="border-t border-line bg-inset/40 px-4 py-2.5">
+        <label className="grid gap-1.5">
+          <span className="text-[11.5px] font-medium uppercase tracking-wide text-ink-3">
+            Reply to the agent
+          </span>
+          <textarea
+            value={reply}
+            disabled={busy}
+            onChange={(event) => setReply(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault();
+                if (canReply) sendReply();
+              }
+            }}
+            rows={2}
+            placeholder="Type a free-form reply or question…"
+            data-field="follow-up-reply"
+            aria-label="Free-form reply to the agent"
+            className="w-full resize-none rounded-control border border-line bg-canvas px-2 py-1.5 text-[13px] text-ink outline-none placeholder:text-ink-3 focus:border-line-strong"
+          />
+        </label>
       </div>
     </section>
   );

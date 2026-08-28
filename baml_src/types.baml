@@ -63,3 +63,24 @@ class CritiqueReport {
 class RewriteResult {
   rewrittenSelection string @assert({{ this|length > 0 }})
 }
+
+enum FollowUpIntent {
+  Answer
+  Question
+  Unclear
+}
+
+class FollowUpAnswer {
+  field string
+  value string
+}
+
+class FollowUpInterpretation {
+  intent FollowUpIntent
+  answers FollowUpAnswer[]
+}
+
+class FollowUpDraft {
+  message string @assert({{ this|length > 0 }})
+  requestedFields string[]
+}

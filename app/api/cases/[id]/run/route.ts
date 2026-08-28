@@ -30,6 +30,14 @@ function parseAnswers(
   return { ok: true, answers: Object.fromEntries(entries) as Record<string, string> };
 }
 
+function parseMessage(
+  raw: unknown,
+): { ok: true; message: string | null } | { ok: false } {
+  if (raw === undefined) return { ok: true, message: null };
+  if (typeof raw !== "string") return { ok: false };
+  return { ok: true, message: raw };
+}
+
 export async function POST(
   request: Request,
   context: { params: Promise<Params> },
@@ -49,6 +57,7 @@ export async function POST(
     return NextResponse.json({ error: "invalid_input" }, { status: 400 });
   }
   let answers: Record<string, string> | null = null;
+  let message: string | null = null;
   if (parsed !== undefined) {
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
       return NextResponse.json({ error: "invalid_input" }, { status: 400 });
@@ -60,6 +69,13 @@ export async function POST(
         return NextResponse.json({ error: "invalid_input" }, { status: 400 });
       }
       answers = result.answers;
+    }
+    if ("message" in body) {
+      const result = parseMessage(body.message);
+      if (!result.ok) {
+        return NextResponse.json({ error: "invalid_input" }, { status: 400 });
+      }
+      message = result.message;
     }
   }
 
@@ -98,13 +114,19 @@ export async function POST(
       }
       try {
         const events =
-          answers !== null
-            ? resumeCase(id, answers, {
-                dataDir,
-                signal,
-                llm,
-                onStream: (frame) => enqueue(sseFrame(frame)),
-              })
+          answers !== null || message !== null
+            ? resumeCase(
+                id,
+                message !== null
+                  ? { message, answers: answers ?? undefined }
+                  : { answers: answers ?? undefined },
+                {
+                  dataDir,
+                  signal,
+                  llm,
+                  onStream: (frame) => enqueue(sseFrame(frame)),
+                },
+              )
             : runCase(id, {
                 dataDir,
                 signal,

@@ -23,11 +23,15 @@ import {
   streamGenerateCustomerEmail,
   streamDraftDecision,
   rewriteResponseText,
+  interpretFollowUp,
+  draftFollowUp,
   type GenerateEmailInput,
   type ExtractClaimsInput,
   type DraftDecisionInput,
   type CritiqueDecisionInput,
   type RewriteTextInput,
+  type InterpretFollowUpInput,
+  type DraftFollowUpInput,
 } from "../llm/baml.ts";
 import type {
   Claim,
@@ -35,6 +39,9 @@ import type {
   ExtractedClaims,
   DecisionDraft,
   CritiqueReport,
+  FollowUpDraft,
+  FollowUpInterpretation,
+  FollowUpAnswer,
 } from "../llm/types.ts";
 
 import { awaitCaseEmail } from "./email-prep.ts";
@@ -105,6 +112,14 @@ export type LlmClient = {
     input: RewriteTextInput,
     signal?: AbortSignal,
   ): Promise<{ rewrittenSelection: string }>;
+  interpretFollowUp?(
+    input: InterpretFollowUpInput,
+    signal?: AbortSignal,
+  ): Promise<FollowUpInterpretation>;
+  draftFollowUp?(
+    input: DraftFollowUpInput,
+    signal?: AbortSignal,
+  ): Promise<FollowUpDraft>;
   streamGenerateCustomerEmail?(
     input: GenerateEmailInput,
     onPartial: (partial: EmailStreamPartial) => void,
@@ -123,6 +138,8 @@ const defaultLlm: LlmClient = {
   draftDecision: (input, signal) => draftDecision(input, signal),
   critiqueDecision: (input, signal) => critiqueDecision(input, signal),
   rewriteResponseText: (input, signal) => rewriteResponseText(input, signal),
+  interpretFollowUp: (input, signal) => interpretFollowUp(input, signal),
+  draftFollowUp: (input, signal) => draftFollowUp(input, signal),
   streamGenerateCustomerEmail: (input, onPartial, signal) =>
     streamGenerateCustomerEmail(input, onPartial, signal),
   streamDraftDecision: (input, onPartial, signal) =>
@@ -733,9 +750,174 @@ async function emitReviewable(
   });
 }
 
+export type FollowUpTurn = {
+  role: "user" | "agent";
+  content: string;
+};
+
+export type FollowUpConversation = FollowUpTurn[];
+
+const MAX_FOLLOWUP_TURNS = 8;
+
+function asFollowUpConversation(value: unknown): FollowUpConversation {
+  if (!Array.isArray(value)) return [];
+  const out: FollowUpConversation = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const t = item as Record<string, unknown>;
+    const role = t.role;
+    const content = t.content;
+    if (typeof content !== "string" || content.trim().length === 0) continue;
+    if (role !== "user" && role !== "agent") continue;
+    out.push({ role, content });
+  }
+  return out;
+}
+
+function readFollowUpConversation(payload: unknown): FollowUpConversation {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return [];
+  const p = payload as Record<string, unknown>;
+  if (!("conversation" in p)) return [];
+  return asFollowUpConversation(p.conversation);
+}
+
+function capConversation(turns: FollowUpConversation): FollowUpConversation {
+  if (turns.length <= MAX_FOLLOWUP_TURNS) return turns.slice();
+  return turns.slice(turns.length - MAX_FOLLOWUP_TURNS);
+}
+
+function readPriorConversations(
+  events: readonly TraceEvent[],
+  currentRunId: string,
+): FollowUpConversation {
+  const turns: FollowUpConversation = [];
+  for (const e of events) {
+    if (e.runId === currentRunId) continue;
+    if (e.stage !== "reviewable" || e.status !== "completed") continue;
+    turns.push(...readFollowUpConversation(e.payload));
+  }
+  return capConversation(turns);
+}
+
+function normalizeField(field: string): string {
+  return field.trim();
+}
+
+function validateCandidateAnswers(
+  claims: ExtractedClaims | null,
+  candidates: readonly FollowUpAnswer[],
+): { accepted: Record<string, string>; rejected: FollowUpAnswer[] } {
+  if (!claims) return { accepted: {}, rejected: [...candidates] };
+  const allowed = new Set(claims.missingFields.map(normalizeField));
+  const accepted: Record<string, string> = {};
+  const rejected: FollowUpAnswer[] = [];
+  for (const candidate of candidates) {
+    const field = normalizeField(candidate.field);
+    const value = candidate.value.trim();
+    if (!allowed.has(field) || value.length === 0) {
+      rejected.push(candidate);
+      continue;
+    }
+    if (Object.prototype.hasOwnProperty.call(accepted, field)) {
+      rejected.push(candidate);
+      continue;
+    }
+    accepted[field] = value;
+  }
+  return { accepted, rejected };
+}
+
+async function emitFollowUpStarted(
+  ctx: RunContext,
+  summary: string,
+  conversation: FollowUpConversation,
+): Promise<TraceEvent> {
+  return record(ctx, "follow_up", "started", summary, {
+    functionName: ctx.llm.draftFollowUp ? "DraftFollowUp" : null,
+    payload: { conversation },
+  });
+}
+
+async function emitFollowUpCompleted(
+  ctx: RunContext,
+  summary: string,
+  extras: { conversation: FollowUpConversation; followUp: FollowUpDraft },
+): Promise<TraceEvent> {
+  return record(ctx, "follow_up", "completed", summary, {
+    functionName: ctx.llm.draftFollowUp ? "DraftFollowUp" : null,
+    payload: {
+      conversation: extras.conversation,
+      followUp: extras.followUp,
+    },
+  });
+}
+
+async function emitFollowUpReviewable(
+  ctx: RunContext,
+  summary: string,
+  extras: {
+    followUp: FollowUpDraft;
+    conversation: FollowUpConversation;
+  },
+): Promise<TraceEvent> {
+  return record(ctx, "reviewable", "completed", summary, {
+    evidenceRefs: ctx.rules?.evidenceRefs ?? [],
+    payload: {
+      outcome: "follow_up",
+      draft: null,
+      rules: ctx.rules,
+      claims: ctx.claims,
+      knowledgeCount: ctx.knowledge.length,
+      followUp: extras.followUp,
+      conversation: extras.conversation,
+    },
+  });
+}
+
+async function generateNextFollowUp(
+  ctx: RunContext,
+  memoryContext: MemoryContext,
+  conversation: FollowUpConversation,
+): Promise<{ ok: boolean; events: TraceEvent[]; draft?: FollowUpDraft }> {
+  if (!ctx.llm.draftFollowUp) {
+    return { ok: false, events: [] };
+  }
+  const started = await emitFollowUpStarted(ctx, "Drafting the next follow-up", conversation);
+  const startedAt = Date.now();
+  let draft: FollowUpDraft;
+  try {
+    const input: DraftFollowUpInput = {
+      casePackageJson: JSON.stringify(ctx.casePkg),
+      claimsJson: JSON.stringify(ctx.claims),
+      rulesJson: JSON.stringify(ctx.rules),
+      knowledgeJson: JSON.stringify(ctx.knowledge),
+      memoryJson: JSON.stringify(memoryContext),
+      conversationJson: JSON.stringify(capConversation(conversation)),
+    };
+    draft = await ctx.llm.draftFollowUp(input, ctx.signal);
+    ctx.bamlCalls += 1;
+  } catch (err) {
+    const dur = Date.now() - startedAt;
+    const message = err instanceof Error ? err.message : String(err);
+    const failed = await record(ctx, "follow_up", "failed", `Follow-up draft failed: ${message}`, {
+      functionName: "DraftFollowUp",
+      error: message,
+      durationMs: dur,
+    });
+    return { ok: false, events: [started, failed] };
+  }
+  void startedAt;
+  const completed = await emitFollowUpCompleted(ctx, "Follow-up drafted", {
+    conversation,
+    followUp: draft,
+  });
+  return { ok: true, events: [started, completed], draft };
+}
+
 async function* decisionTail(
   ctx: RunContext,
   version: number,
+  priorConversation: FollowUpConversation = [],
 ): AsyncGenerator<TraceEvent> {
   const rules = await evaluateRules(ctx);
   for (const e of rules.events) yield e;
@@ -754,11 +936,25 @@ async function* decisionTail(
     (ctx.claims && ctx.claims.missingFields.length > 0) ||
     ctx.rules?.outcome === "follow_up_required";
   if (shortCircuit) {
-    const summary =
+    const reasonSummary =
       ctx.claims && ctx.claims.missingFields.length > 0
         ? `Follow-up required: ${ctx.claims.missingFields.join(", ")}`
         : "Follow-up required by deterministic rules";
-    const ev = await emitReviewable(ctx, "completed", summary, "follow_up");
+    let conversation = capConversation(priorConversation);
+    let draft: FollowUpDraft;
+    const generated = await generateNextFollowUp(ctx, memoryContext, conversation);
+    for (const e of generated.events) yield e;
+    if (!generated.ok) {
+      await finalizeCase(ctx, "error", version);
+      return;
+    }
+    draft = generated.draft as FollowUpDraft;
+    conversation = [...conversation, { role: "agent", content: draft.message }];
+    const summary = reasonSummary;
+    const ev = await emitFollowUpReviewable(ctx, summary, {
+      followUp: draft,
+      conversation,
+    });
     yield ev;
     await finalizeCase(ctx, "reviewable", version);
     return;
@@ -999,14 +1195,30 @@ function asExtractedClaims(payload: unknown): ExtractedClaims | null {
   return payload as ExtractedClaims;
 }
 
+export type ResumeInput = {
+  message?: string;
+  answers?: Record<string, string>;
+};
+
 export async function* resumeCase(
   caseId: string,
-  answers: Record<string, string>,
+  input: ResumeInput | Record<string, string> | undefined,
   options: RunCaseOptions = {},
 ): AsyncGenerator<TraceEvent> {
   const dataDir = resolve(options.dataDir ?? DEFAULT_DATA_DIR);
   const llm: LlmClient = options.llm ?? defaultLlm;
   const runId = ensureRunId(options.runId);
+
+  const normalized: ResumeInput =
+    input === undefined
+      ? {}
+      : typeof input === "object" && !Array.isArray(input) &&
+          ("message" in input || "answers" in input)
+        ? (input as ResumeInput)
+        : { answers: input as Record<string, string> };
+
+  const messageText = normalized.message?.trim() ?? "";
+  const answersInput = normalized.answers ?? {};
 
   const state = await readState({ dataDir });
   const existing = state.cases.find((c) => c.caseId === caseId);
@@ -1045,7 +1257,41 @@ export async function* resumeCase(
     (e) => e.stage === "checking_records" && e.status === "completed",
   );
   const startSeq = caseEvents.reduce((m, e) => (e.sequence > m ? e.sequence : m), 0) + 1;
-  const supplements = { ...(existing.supplements ?? {}), ...answers };
+  const priorConversation = readPriorConversations(caseEvents, runId);
+
+  let candidateAnswers: FollowUpAnswer[] = Object.entries(answersInput).map(([field, value]) => ({
+    field,
+    value,
+  }));
+  if (messageText.length > 0 && llm.interpretFollowUp) {
+    try {
+      const interpretation = await llm.interpretFollowUp(
+        {
+          casePackageJson: JSON.stringify(existing.pkg),
+          claimsJson: JSON.stringify(claims),
+          conversationJson: JSON.stringify(priorConversation),
+          messageText,
+        },
+        options.signal,
+      );
+      if (interpretation.intent === "answer") {
+        candidateAnswers = interpretation.answers;
+      } else {
+        candidateAnswers = [];
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new PipelineError(
+        "follow_up_interpret_failed",
+        `follow-up interpretation failed: ${message}`,
+      );
+    }
+  } else if (messageText.length > 0) {
+    candidateAnswers = [];
+  }
+
+  const { accepted } = validateCandidateAnswers(claims, candidateAnswers);
+  const supplements = { ...(existing.supplements ?? {}), ...accepted };
 
   const ctx: RunContext = {
     ...buildContext(caseId, existing, runId, startSeq, options, dataDir, llm),
@@ -1087,5 +1333,9 @@ export async function* resumeCase(
     return { ...s, cases };
   });
 
-  yield* decisionTail(ctx, existing.version + 1);
+  const baseConversation: FollowUpConversation = priorConversation.slice();
+  if (messageText.length > 0) {
+    baseConversation.push({ role: "user", content: messageText });
+  }
+  yield* decisionTail(ctx, existing.version + 1, baseConversation);
 }

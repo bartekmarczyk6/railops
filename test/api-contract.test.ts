@@ -160,6 +160,17 @@ async function runRequestWithBody(id: string, body: unknown): Promise<Response> 
   );
 }
 
+async function runRequestWithRaw(id: string, body: string, contentType: string): Promise<Response> {
+  return runCaseStream(
+    new Request(`http://localhost/api/cases/${id}/run`, {
+      method: "POST",
+      headers: { "content-type": contentType },
+      body,
+    }) as unknown as Parameters<typeof runCaseStream>[0],
+    { params: paramsPromise({ id }) },
+  );
+}
+
 async function rewriteRequest(id: string, body: unknown): Promise<Response> {
   return rewriteRoute(
     makeJsonRequest(`http://localhost/api/cases/${id}/rewrite`, body) as unknown as Parameters<typeof rewriteRoute>[0],
@@ -194,6 +205,32 @@ function makeFollowUpLlm(): LlmClient {
     }),
     draftDecision: async () => makeDecision(),
     critiqueDecision: async () => ({ passed: true, findings: [], correctedDraft: null }),
+    interpretFollowUp: async ({ claimsJson, messageText }) => {
+      let parsedClaims: { missingFields?: string[] } = {};
+      try {
+        parsedClaims = JSON.parse(claimsJson);
+      } catch {
+        parsedClaims = {};
+      }
+      const missing = parsedClaims.missingFields ?? [];
+      return {
+        intent: "answer",
+        answers: missing.map((field) => ({ field, value: messageText })),
+      };
+    },
+    draftFollowUp: async ({ claimsJson }) => {
+      let parsedClaims: { missingFields?: string[] } = {};
+      try {
+        parsedClaims = JSON.parse(claimsJson);
+      } catch {
+        parsedClaims = {};
+      }
+      const missing = parsedClaims.missingFields ?? [];
+      return {
+        message: `Could you confirm the ${missing.join(", ") || "missing details"}?`,
+        requestedFields: missing.slice(0, 3),
+      };
+    },
   };
 }
 
@@ -610,5 +647,94 @@ test("POST /api/cases/:id/rewrite with missing fields returns 400 invalid_input"
     const res = await rewriteRequest(caseId, { selection: "", instruction: "Shorten", response: "text" });
     assert.equal(res.status, 400);
     assert.equal(((await res.json()) as { error?: string }).error, "invalid_input");
+  });
+});
+
+test("POST /api/cases/:id/run with message serializes the free-form message into a resume", async () => {
+  await withFreshStore(async () => {
+    const created = await createCaseRequest({ topic: "delay_refund", truthMode: "supported_by_records" });
+    const { caseId } = (await created.json()) as { caseId: string };
+    for await (const _ev of runCaseDirect(caseId, {
+      dataDir: process.env.RAILOPS_DATA_DIR!,
+      runId: "run-followup",
+      llm: makeFollowUpLlm(),
+    })) {
+      void _ev;
+    }
+    const res = await runRequestWithBody(caseId, { message: "It was 45 minutes" });
+    assert.equal(res.status, 200);
+    const { events } = await readSseStream(res);
+    assert.ok(events.length > 0, "message resume must stream events");
+    assert.equal(events[0]?.stage, "evaluating_rules", "message resume stream starts at evaluating_rules");
+    assert.ok(
+      events.some((e) => e.stage === "drafting" && e.status === "completed"),
+      "message resume must draft a decision when answered",
+    );
+    const state = await readState({ dataDir: process.env.RAILOPS_DATA_DIR! });
+    const finalCase = state.cases.find((c) => c.caseId === caseId);
+    assert.deepEqual(finalCase?.supplements, { claimed_delay_minutes: "It was 45 minutes" });
+  });
+});
+
+test("POST /api/cases/:id/run still serializes answers as before when no message is supplied", async () => {
+  await withFreshStore(async () => {
+    const created = await createCaseRequest({ topic: "delay_refund", truthMode: "supported_by_records" });
+    const { caseId } = (await created.json()) as { caseId: string };
+    for await (const _ev of runCaseDirect(caseId, {
+      dataDir: process.env.RAILOPS_DATA_DIR!,
+      runId: "run-followup",
+      llm: makeFollowUpLlm(),
+    })) {
+      void _ev;
+    }
+    const res = await runRequestWithBody(caseId, { answers: { claimed_delay_minutes: "45" } });
+    assert.equal(res.status, 200);
+    await readSseStream(res);
+    const state = await readState({ dataDir: process.env.RAILOPS_DATA_DIR! });
+    const finalCase = state.cases.find((c) => c.caseId === caseId);
+    assert.deepEqual(finalCase?.supplements, { claimed_delay_minutes: "45" });
+  });
+});
+
+test("POST /api/cases/:id/run accepts both message and answers in the same body", async () => {
+  await withFreshStore(async () => {
+    const created = await createCaseRequest({ topic: "delay_refund", truthMode: "supported_by_records" });
+    const { caseId } = (await created.json()) as { caseId: string };
+    for await (const _ev of runCaseDirect(caseId, {
+      dataDir: process.env.RAILOPS_DATA_DIR!,
+      runId: "run-followup",
+      llm: makeFollowUpLlm(),
+    })) {
+      void _ev;
+    }
+    const res = await runRequestWithBody(caseId, {
+      message: "It was 45 minutes",
+      answers: { claimed_delay_minutes: "ignored" },
+    });
+    assert.equal(res.status, 200);
+    await readSseStream(res);
+    const state = await readState({ dataDir: process.env.RAILOPS_DATA_DIR! });
+    const finalCase = state.cases.find((c) => c.caseId === caseId);
+    assert.deepEqual(finalCase?.supplements, { claimed_delay_minutes: "It was 45 minutes" });
+  });
+});
+
+test("POST /api/cases/:id/run rejects non-string message with 400 invalid_input", async () => {
+  await withFreshStore(async () => {
+    const created = await createCaseRequest({ topic: "delay_refund", truthMode: "supported_by_records" });
+    const { caseId } = (await created.json()) as { caseId: string };
+    const numberMessage = await runRequestWithRaw(
+      caseId,
+      JSON.stringify({ message: 42 }),
+      "application/json",
+    );
+    assert.equal(numberMessage.status, 400);
+    assert.equal(((await numberMessage.json()) as { error?: string }).error, "invalid_input");
+    const arrayMessage = await runRequestWithRaw(
+      caseId,
+      JSON.stringify({ message: ["nope"] }),
+      "application/json",
+    );
+    assert.equal(arrayMessage.status, 400);
   });
 });
