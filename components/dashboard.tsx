@@ -1,24 +1,43 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { Button } from "./beui/atoms/Button.tsx";
 import { ToastProvider } from "./ui/toast.tsx";
+import { Skeleton } from "./ui/skeleton.tsx";
+import { Button as UIButton } from "./ui/button.tsx";
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "./ui/alert-dialog.tsx";
 import { CaseList } from "./cases/case-list.tsx";
 import { CreateCaseDialog } from "./cases/create-case-dialog.tsx";
 import { EmptyOnboarding } from "./cases/empty-onboarding.tsx";
 import { OutcomeDistributionChart } from "./charts/outcome-distribution-chart.tsx";
 import { ReviewerAlignmentChart } from "./charts/reviewer-alignment-chart.tsx";
-import type { DashboardData } from "../app/dashboard-data.ts";
+import { computeDashboardData, type DashboardData } from "../app/dashboard-data.ts";
+import { clearBrowserState, readBrowserState } from "../lib/storage/browser-store.ts";
+import type { AppState } from "../lib/storage/types.ts";
 
 export type DashboardProps = {
-  data: DashboardData;
+  data?: DashboardData;
   onOpenCase?: (caseId: string) => void;
   onCaseCreated?: (caseId: string) => void;
 };
 
-export function Dashboard({ data, onOpenCase, onCaseCreated }: DashboardProps) {
+export function Dashboard({ data: dataProp, onOpenCase, onCaseCreated }: DashboardProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
+  const [browserState, setBrowserState] = useState<AppState | null>(null);
+
+  useEffect(() => {
+    setBrowserState(readBrowserState());
+  }, []);
 
   const openCase = useCallback(
     (id: string) => {
@@ -32,6 +51,42 @@ export function Dashboard({ data, onOpenCase, onCaseCreated }: DashboardProps) {
     },
     [onOpenCase],
   );
+
+  const handleCaseCreated = useCallback(
+    (caseId: string) => {
+      setBrowserState(readBrowserState());
+      onCaseCreated?.(caseId);
+    },
+    [onCaseCreated],
+  );
+
+  function handleReset() {
+    clearBrowserState();
+    setBrowserState(readBrowserState());
+  }
+
+  const data =
+    dataProp ?? (browserState ? computeDashboardData(browserState.cases) : null);
+
+  if (!data) {
+    return (
+      <ToastProvider>
+        <main className="mx-auto flex w-full max-w-5xl flex-col gap-8 px-4 py-8 sm:px-6">
+          <div
+            role="status"
+            aria-live="polite"
+            data-testid="dashboard-loading"
+            className="flex flex-col gap-3 rounded-window bg-surface p-4 shadow-card"
+          >
+            <Skeleton className="h-12 w-full rounded-control" />
+            <Skeleton className="h-12 w-full rounded-control" />
+            <Skeleton className="h-12 w-full rounded-control" />
+            <p className="px-1 text-sm text-ink-2">Loading demo data…</p>
+          </div>
+        </main>
+      </ToastProvider>
+    );
+  }
 
   const hasReviewed = data.alignment.length > 0;
   const isEmpty = data.cases.length === 0;
@@ -48,13 +103,22 @@ export function Dashboard({ data, onOpenCase, onCaseCreated }: DashboardProps) {
               Synthetic data only — no real customer data is used.
             </p>
           </div>
-          <Button
-            variant="accent"
-            data-testid="header-new-case"
-            onClick={() => setDialogOpen(true)}
-          >
-            Create demo case
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="secondary"
+              data-testid="header-reset"
+              onClick={() => setResetOpen(true)}
+            >
+              Reset demo data
+            </Button>
+            <Button
+              variant="accent"
+              data-testid="header-new-case"
+              onClick={() => setDialogOpen(true)}
+            >
+              Create demo case
+            </Button>
+          </div>
         </header>
 
         {isEmpty ? (
@@ -118,8 +182,35 @@ export function Dashboard({ data, onOpenCase, onCaseCreated }: DashboardProps) {
         <CreateCaseDialog
           open={dialogOpen}
           onOpenChange={setDialogOpen}
-          onCaseCreated={onCaseCreated}
+          onCaseCreated={handleCaseCreated}
         />
+
+        <AlertDialog open={resetOpen} onOpenChange={setResetOpen}>
+          <AlertDialogPopup>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Reset demo data?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This deletes all cases and reviews stored in your browser. This
+                cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogClose render={<UIButton variant="outline" />} data-action="cancel-reset">
+                Cancel
+              </AlertDialogClose>
+              <UIButton
+                variant="destructive"
+                data-action="confirm-reset"
+                onClick={() => {
+                  handleReset();
+                  setResetOpen(false);
+                }}
+              >
+                Reset
+              </UIButton>
+            </AlertDialogFooter>
+          </AlertDialogPopup>
+        </AlertDialog>
       </main>
     </ToastProvider>
   );
