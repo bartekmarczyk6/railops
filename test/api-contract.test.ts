@@ -125,7 +125,7 @@ function makeStoredCase(): StoredCase {
   };
 }
 
-type DoneFrame = { type: "done"; stored: StoredCase };
+type DoneFrame = { type: "done"; stored: StoredCase; events: TraceEvent[] };
 type StreamFrameShape = { type: "stream"; stage: string; partial: Record<string, unknown> };
 
 async function readSseStream(response: Response): Promise<{
@@ -366,6 +366,19 @@ test("POST /api/cases/:id/run streams trace events and ends with a done frame", 
   assert.equal(done!.stored.state, "reviewable", "fake-LLM run must end reviewable");
   assert.equal(done!.stored.version, stored.version + 1, "version must grow");
   assert.ok(Array.isArray(done!.stored.trace));
+  assert.ok(Array.isArray(done!.events), "done frame must carry the run's events");
+  assert.ok(done!.events.length > 0, "done frame events must not be empty");
+  for (const ev of done!.events) {
+    assert.equal(ev.caseId, stored.caseId, "done frame events must belong to the case");
+  }
+  assert.ok(
+    done!.events.some(
+      (e) =>
+        e.status === "completed" &&
+        (e.stage === "reading_email" || e.stage === "drafting"),
+    ),
+    "done frame events must include at least one completed stage event",
+  );
   const text = JSON.stringify({ events, streamFrames, done });
   assert.ok(!bodyContainsSecret(text), "streamed frames must not include any secret");
 });

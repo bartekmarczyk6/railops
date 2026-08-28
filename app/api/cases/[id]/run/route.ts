@@ -16,7 +16,7 @@ export const maxDuration = 60;
 
 type Params = { id: string };
 
-type DoneFrame = { type: "done"; stored: StoredCase };
+type DoneFrame = { type: "done"; stored: StoredCase; events: TraceEvent[] };
 
 function sseFrame(payload: TraceEvent | StreamFrame | DoneFrame): Uint8Array {
   return new TextEncoder().encode(`data: ${JSON.stringify(payload)}\n\n`);
@@ -156,7 +156,8 @@ export async function POST(
         }
         const finalState = await readState({ dataDir });
         const updated = finalState.cases.find((c) => c.caseId === id) ?? stored;
-        enqueue(sseFrame({ type: "done", stored: updated }));
+        const runEvents = finalState.events.filter((e) => e.caseId === id);
+        enqueue(sseFrame({ type: "done", stored: updated, events: runEvents }));
         close();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

@@ -135,13 +135,21 @@ export function CaseReviewPage(props: CaseReviewPageProps): React.JSX.Element {
   const run = useCaseRun(caseData.caseId, live, {
     getStored: () =>
       readBrowserState().cases.find((c) => c.caseId === caseData.caseId) ?? currentCase,
-    onDone: (stored) => {
-      updateBrowserState((s) => ({
-        ...s,
-        cases: s.cases.some((c) => c.caseId === stored.caseId)
-          ? s.cases.map((c) => (c.caseId === stored.caseId ? stored : c))
-          : [...s.cases, stored],
-      }));
+    onDone: (stored, events) => {
+      updateBrowserState((s) => {
+        const incoming = new Map(events.map((e) => [e.id, e]));
+        const mergedEvents = [
+          ...s.events.filter((e) => e.caseId !== stored.caseId || !incoming.has(e.id)),
+          ...events,
+        ];
+        return {
+          ...s,
+          events: mergedEvents,
+          cases: s.cases.some((c) => c.caseId === stored.caseId)
+            ? s.cases.map((c) => (c.caseId === stored.caseId ? stored : c))
+            : [...s.cases, stored],
+        };
+      });
       setCurrentCase(stored);
       onCaseUpdated?.(stored);
     },

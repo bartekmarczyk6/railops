@@ -9,7 +9,7 @@ export type CaseRunBody = { answers: Record<string, string> };
 
 export type CaseRunOptions = {
   getStored?: () => StoredCase | undefined;
-  onDone?: (stored: StoredCase) => void;
+  onDone?: (stored: StoredCase, events: TraceEvent[]) => void;
 };
 
 export type CaseRunState = {
@@ -113,7 +113,11 @@ export function useCaseRun(
       if (value.type === "done") {
         const stored = value.stored as Partial<StoredCase> | null;
         if (stored && typeof stored === "object" && typeof stored.caseId === "string" && stored.caseId.length > 0) {
-          optionsRef.current?.onDone?.(stored as StoredCase);
+          const rawEvents = value.events;
+          const events = Array.isArray(rawEvents)
+            ? (rawEvents as unknown[]).filter((e): e is TraceEvent => isTraceEvent(e))
+            : [];
+          optionsRef.current?.onDone?.(stored as StoredCase, events);
         }
         return;
       }
