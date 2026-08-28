@@ -7,6 +7,7 @@ import { CircleCheck } from "lucide-react";
 import { Shimmer } from "../beui/atoms/Shimmer.tsx";
 import { Button } from "../ui/button.tsx";
 import { createDemoCase } from "../../lib/domain/case-factory.ts";
+import { caseHref } from "../../lib/domain/case-url.ts";
 import type { DemoCasePackage } from "../../lib/domain/types.ts";
 import type { EmailDraft } from "../../lib/llm/types.ts";
 import { isCaseTopic, isTruthMode } from "../../app/api/_shared/validation.ts";
@@ -167,7 +168,7 @@ export function CreateLoadingFeed({ doneCount }: CreateLoadingFeedProps): React.
 }
 
 export type CreateCaseFormProps = {
-  onCreated: (caseId: string) => void;
+  onCreated: (stored: StoredCase) => void;
   fetchImpl?: FetchImpl;
   initialTopic?: string;
   initialTruthMode?: string;
@@ -249,7 +250,7 @@ export function CreateCaseForm({
           setTimeout(() => {
             if (cancelled) return;
             setStatus("success");
-            onCreatedRef.current(pkg.id);
+            onCreatedRef.current(stored);
           }, 350),
         );
       } catch (err) {
@@ -417,21 +418,22 @@ export function CreateCaseDialog({
     [],
   );
 
-  function handleCreated(caseId: string) {
+  function handleCreated(stored: StoredCase) {
     toastManager.add({
       type: "success",
       title: "Case created",
       description: "Opening the review workspace",
     });
+    const href = caseHref(stored);
     navigateTimer.current = setTimeout(() => {
       if (onCaseCreated) {
-        onCaseCreated(caseId);
+        onCaseCreated(stored.caseId);
         return;
       }
       if (router) {
-        router.push(`/case/${caseId}`);
+        router.push(href);
       } else if (typeof window !== "undefined") {
-        window.location.assign(`/case/${caseId}`);
+        window.location.assign(href);
       }
     }, 900);
   }

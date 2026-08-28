@@ -6,6 +6,7 @@ import { Button } from "../beui/atoms/Button.tsx";
 import { Button as LinkButton } from "../ui/button.tsx";
 import { Skeleton } from "../ui/skeleton.tsx";
 import type { StoredCase } from "../../lib/storage/types.ts";
+import { caseHref } from "../../lib/domain/case-url.ts";
 import { CaseStatusPill } from "./case-status.tsx";
 
 const TOPIC_LABELS: Record<string, string> = {
@@ -92,7 +93,7 @@ function formatRelativeTimestamp(iso: string): string {
 
 export type CaseListProps = {
   cases: readonly StoredCase[];
-  onOpen: (caseId: string) => void;
+  onOpen: (stored: StoredCase) => void;
   loading?: boolean;
   error?: string | null;
   onCreate?: () => void;
@@ -189,15 +190,15 @@ export function CaseList({ cases, onOpen, loading, error, onCreate }: CaseListPr
               key={c.caseId}
               data-testid={`case-row-${c.caseId}`}
               className="group cursor-pointer border-b border-line last:border-b-0 hover:bg-hover"
-              onClick={() => onOpen(c.caseId)}
+              onClick={() => onOpen(c)}
             >
               <td className="px-4 py-3.5">
                 <a
-                  href={`/case/${c.caseId}`}
+                  href={caseHref(c)}
                   className="flex flex-col gap-0.5 rounded-chip focus-visible:outline-2"
                   onClick={(e) => {
                     e.preventDefault();
-                    onOpen(c.caseId);
+                    onOpen(c);
                   }}
                 >
                   <span className="font-medium text-ink">{topicLabel(c.topic)}</span>

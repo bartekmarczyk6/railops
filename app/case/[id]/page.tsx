@@ -4,7 +4,8 @@ import React from "react";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import knowledgeIndexData from "@/knowledge/index.json";
-import { readBrowserState } from "@/lib/storage/browser-store.ts";
+import { readBrowserState, updateBrowserState } from "@/lib/storage/browser-store.ts";
+import { parseCaseSeedParams, rebuildStoredCase } from "@/lib/domain/case-url.ts";
 import type { AppState, StoredCase, TraceEvent } from "@/lib/storage/types.ts";
 import type {
   CritiqueReport,
@@ -196,8 +197,20 @@ export default function CasePage(): React.JSX.Element {
   const [state, setState] = useState<AppState | null>(null);
 
   useEffect(() => {
-    setState(readBrowserState());
-  }, []);
+    const existing = readBrowserState();
+    if (existing.cases.some((c) => c.caseId === id)) {
+      setState(existing);
+      return;
+    }
+    const seedParams = parseCaseSeedParams(window.location.search);
+    if (!seedParams) {
+      setState(existing);
+      return;
+    }
+    const rebuilt = rebuildStoredCase(id, seedParams);
+    const next = updateBrowserState((s) => ({ ...s, cases: [...s.cases, rebuilt] }));
+    setState(next);
+  }, [id]);
 
   if (!state) {
     return (
@@ -221,7 +234,15 @@ export default function CasePage(): React.JSX.Element {
     return (
       <main style={{ padding: "var(--space-4)" }}>
         <h1>Case not found</h1>
-        <p>The case {id} is not present in local storage.</p>
+        <p>
+          Demo cases are stored in the browser that created them. This link is
+          missing the parameters needed to rebuild the case, so it cannot be
+          restored here. Create a new case from the dashboard — its link will
+          work in any browser.
+        </p>
+        <p>
+          <a href="/">Back to the dashboard</a>
+        </p>
       </main>
     );
   }

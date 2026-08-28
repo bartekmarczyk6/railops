@@ -22,7 +22,8 @@ import { OutcomeDistributionChart } from "./charts/outcome-distribution-chart.ts
 import { ReviewerAlignmentChart } from "./charts/reviewer-alignment-chart.tsx";
 import { computeDashboardData, type DashboardData } from "../app/dashboard-data.ts";
 import { clearBrowserState, readBrowserState } from "../lib/storage/browser-store.ts";
-import type { AppState } from "../lib/storage/types.ts";
+import { caseHref } from "../lib/domain/case-url.ts";
+import type { AppState, StoredCase } from "../lib/storage/types.ts";
 
 export type DashboardProps = {
   data?: DashboardData;
@@ -40,13 +41,13 @@ export function Dashboard({ data: dataProp, onOpenCase, onCaseCreated }: Dashboa
   }, []);
 
   const openCase = useCallback(
-    (id: string) => {
+    (stored: StoredCase) => {
       if (onOpenCase) {
-        onOpenCase(id);
+        onOpenCase(stored.caseId);
         return;
       }
       if (typeof window !== "undefined") {
-        window.location.assign(`/case/${id}`);
+        window.location.assign(caseHref(stored));
       }
     },
     [onOpenCase],
