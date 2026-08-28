@@ -37,6 +37,9 @@ type Mode = "idle" | "thinking" | "streaming" | "result";
 export type DraftSelectionActionsProps = {
   text: string;
   caseId: string;
+  topic: string;
+  truthMode: string;
+  account: { fullName: string; email: string };
   enabled: boolean;
   onApply: (newFullResponse: string) => void;
 };
@@ -91,6 +94,9 @@ type Selection = { value: string; index: number };
 export function DraftSelectionActions({
   text,
   caseId,
+  topic,
+  truthMode,
+  account,
   enabled,
   onApply,
 }: DraftSelectionActionsProps): React.JSX.Element {
@@ -280,6 +286,9 @@ export function DraftSelectionActions({
               selection: target.value,
               instruction,
               response: text,
+              topic,
+              truthMode,
+              account,
             }),
           });
           if (!response.ok) {
@@ -299,7 +308,7 @@ export function DraftSelectionActions({
         }
       })();
     },
-    [caseId, text, selection, reset],
+    [caseId, text, selection, reset, topic, truthMode, account],
   );
 
   const busy = mode === "thinking" || mode === "streaming";

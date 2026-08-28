@@ -1,7 +1,11 @@
+"use client";
+
 import React from "react";
-import { readState } from "@/lib/storage/store.ts";
-import { loadKnowledgeIndex } from "@/lib/knowledge/indexer.ts";
-import { recallReviewerContext } from "@/lib/memory/hindsight.ts";
+import { useEffect, useState } from "react";
+import { useParams } from "next/navigation";
+import knowledgeIndexData from "@/knowledge/index.json";
+import { readBrowserState } from "@/lib/storage/browser-store.ts";
+import type { AppState, StoredCase, TraceEvent } from "@/lib/storage/types.ts";
 import type {
   CritiqueReport,
   DecisionDraft,
@@ -9,17 +13,13 @@ import type {
   ExtractedClaims,
 } from "@/lib/llm/types.ts";
 import type { LearningRecord } from "@/lib/memory/types.ts";
-import type { StoredCase, TraceEvent } from "@/lib/storage/types.ts";
 import type { KnowledgeExcerpt, KnowledgePassage } from "@/lib/knowledge/types.ts";
 import { CaseReviewPage } from "@/components/review/case-review-page.tsx";
 import { OUTCOME_LABEL } from "@/components/review/formatters.ts";
-import type { ReviewInput } from "@/lib/pipeline/review.ts";
-import { DEFAULT_DATA_DIR, reviewCase, revertLearning } from "@/lib/pipeline/review.ts";
 import type { KnowledgeExcerptView } from "@/components/review/knowledge-panel.tsx";
+import { Skeleton } from "@/components/ui/skeleton.tsx";
 
-type Params = { id: string };
-
-const KNOWLEDGE_INDEX_PATH = "./knowledge/index.json";
+const KNOWLEDGE_INDEX = knowledgeIndexData as unknown as { passages: KnowledgePassage[] };
 
 type PipelineOutputs = {
   email: EmailDraft;
@@ -191,14 +191,31 @@ function priorHistoryFromState(
     .map((c) => ({ caseId: c.caseId, topic: c.topic, state: c.state, updatedAt: c.updatedAt }));
 }
 
-export default async function CasePage({
-  params,
-}: {
-  params: Promise<Params>;
-}): Promise<React.JSX.Element> {
-  const { id } = await params;
-  const dataDir = DEFAULT_DATA_DIR;
-  const state = await readState({ dataDir });
+export default function CasePage(): React.JSX.Element {
+  const { id } = useParams<{ id: string }>();
+  const [state, setState] = useState<AppState | null>(null);
+
+  useEffect(() => {
+    setState(readBrowserState());
+  }, []);
+
+  if (!state) {
+    return (
+      <main className="mx-auto grid w-full max-w-[1380px] gap-4 p-4 lg:p-6">
+        <div
+          role="status"
+          aria-live="polite"
+          className="grid gap-3 rounded-window bg-surface p-4 shadow-card"
+        >
+          <Skeleton className="h-12 w-full rounded-control" />
+          <Skeleton className="h-12 w-full rounded-control" />
+          <Skeleton className="h-12 w-full rounded-control" />
+          <p className="px-1 text-sm text-ink-2">Loading case…</p>
+        </div>
+      </main>
+    );
+  }
+
   const stored = state.cases.find((c) => c.caseId === id);
   if (!stored) {
     return (
@@ -214,14 +231,8 @@ export default async function CasePage({
     ...stored.trace.filter((e) => !state.events.some((s) => s.id === e.id)),
   ].sort((a, b) => a.sequence - b.sequence || a.timestamp.localeCompare(b.timestamp));
 
-  let knowledgeIndex: { passages: KnowledgePassage[] } = { passages: [] };
-  try {
-    knowledgeIndex = await loadKnowledgeIndex(KNOWLEDGE_INDEX_PATH);
-  } catch {
-    knowledgeIndex = { passages: [] };
-  }
   const outputs =
-    extractFromTrace(caseEvents, knowledgeIndex.passages) ?? fallbackPipelineOutputs();
+    extractFromTrace(caseEvents, KNOWLEDGE_INDEX.passages) ?? fallbackPipelineOutputs();
   if (stored.email) {
     outputs.email = {
       subject: stored.email.subject,
@@ -233,36 +244,7 @@ export default async function CasePage({
   const knowledge = buildKnowledgeView(outputs.knowledge);
   const hindsight: LearningRecord[] = state.learning;
   const priorHistory = priorHistoryFromState(state, stored.pkg.account.id, stored.caseId);
-
-  const memoryContext = await recallReviewerContext({
-    topic: stored.pkg.topic,
-    query: `${stored.pkg.topic} ${outputs.claims.requestedAction ?? ""}`.trim(),
-    client: null,
-  });
-  const followUp: string[] = memoryContext.source === "hindsight"
-    ? memoryContext.reviewerGuidance.slice(0, 3)
-    : outputs.claims.missingFields.slice(0, 3);
-
-  async function onReviewAction(
-    input: ReviewInput,
-  ): Promise<{ error: string | null; case: StoredCase | null }> {
-    "use server";
-    try {
-      const updated = await reviewCase(input, { dataDir });
-      return { error: null, case: updated };
-    } catch (err) {
-      const code =
-        err && typeof err === "object" && "code" in err && typeof (err as { code: unknown }).code === "string"
-          ? (err as { code: string }).code
-          : "internal";
-      return { error: code, case: null };
-    }
-  }
-
-  async function onUndoLearning(learningId: string): Promise<void> {
-    "use server";
-    await revertLearning(learningId, { dataDir });
-  }
+  const followUp = outputs.claims.missingFields.slice(0, 3);
 
   return (
     <CaseReviewPage
@@ -280,8 +262,7 @@ export default async function CasePage({
       confidence={confidenceFor(outputs.decision, outputs.critique)}
       alternatives={alternativesFor(outputs.decision)}
       followUp={followUp}
-      onReviewAction={onReviewAction}
-      onUndoLearning={onUndoLearning}
+      onCaseUpdated={() => setState(readBrowserState())}
     />
   );
 }

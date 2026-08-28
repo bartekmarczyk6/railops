@@ -4,6 +4,7 @@ import React from "react";
 import { Shimmer } from "@/components/beui/atoms/Shimmer.tsx";
 import { StatusPill } from "@/components/beui/atoms/StatusPill.tsx";
 import type { DecisionDraft } from "@/lib/llm/types.ts";
+import { isCaseTopic, isTruthMode } from "@/app/api/_shared/validation.ts";
 import { DraftEditor } from "./draft-editor.tsx";
 import { DraftSelectionActions } from "./draft-selection-actions.tsx";
 import { formatMoney, outcomeHeadline, outcomeLabel } from "./formatters.ts";
@@ -19,6 +20,8 @@ export type DraftResponseCardProps = {
   streaming?: boolean;
   pending?: boolean;
   caseId?: string;
+  topic?: string;
+  truthMode?: string;
   rewriteEnabled?: boolean;
   onApplyRewrite?: (newResponse: string) => void;
 };
@@ -34,6 +37,8 @@ export function DraftResponseCard({
   streaming = false,
   pending = false,
   caseId,
+  topic,
+  truthMode,
   rewriteEnabled = false,
   onApplyRewrite,
 }: DraftResponseCardProps): React.JSX.Element {
@@ -88,7 +93,7 @@ export function DraftResponseCard({
                 ? ` — ${formatMoney(decision.proposedAmount, currency)}`
                 : ""}
             </p>
-            {streaming || pending || !caseId || !onApplyRewrite ? (
+            {streaming || pending || !caseId || !onApplyRewrite || !isCaseTopic(topic) || !isTruthMode(truthMode) || !account ? (
               <div
                 aria-busy={streaming || undefined}
                 className="rounded-control bg-inset px-3 py-2.5"
@@ -105,6 +110,9 @@ export function DraftResponseCard({
               <DraftSelectionActions
                 text={decision.response}
                 caseId={caseId}
+                topic={topic}
+                truthMode={truthMode}
+                account={account}
                 enabled={rewriteEnabled}
                 onApply={onApplyRewrite}
               />

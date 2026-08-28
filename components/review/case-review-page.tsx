@@ -2,7 +2,6 @@
 
 import React from "react";
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import { Shimmer } from "@/components/beui/atoms/Shimmer.tsx";
 import type { PipelineStage, StoredCase, StoredEmail, TraceEvent } from "@/lib/storage/types.ts";
 import type {
@@ -14,7 +13,13 @@ import type {
 } from "@/lib/llm/types.ts";
 import type { RuleEvaluation } from "@/lib/rules/types.ts";
 import type { LearningRecord } from "@/lib/memory/types.ts";
-import type { ReviewInput } from "@/lib/pipeline/review.ts";
+import {
+  applyReview,
+  applyRevertLearning,
+  MaxRevisionsReached,
+  ReviewError,
+} from "@/lib/pipeline/review.ts";
+import { readBrowserState, updateBrowserState } from "@/lib/storage/browser-store.ts";
 import {
   buildReviewInput,
   emptyFormState,
@@ -56,8 +61,7 @@ export type CaseReviewPageProps = {
   confidence: "high" | "medium" | "low";
   alternatives: string[];
   followUp: string[];
-  onReviewAction: (input: ReviewInput) => Promise<{ error: string | null; case: StoredCase | null }>;
-  onUndoLearning?: (learningId: string) => void | Promise<void>;
+  onCaseUpdated?: (updated: StoredCase) => void;
 };
 
 type EmailPayload = {
@@ -117,8 +121,7 @@ export function CaseReviewPage(props: CaseReviewPageProps): React.JSX.Element {
     confidence,
     alternatives,
     followUp,
-    onReviewAction,
-    onUndoLearning,
+    onCaseUpdated,
   } = props;
 
   const [currentCase, setCurrentCase] = useState<StoredCase>(caseData);
@@ -129,7 +132,20 @@ export function CaseReviewPage(props: CaseReviewPageProps): React.JSX.Element {
   const [pending, setPending] = useState(false);
   const [followUpDismissed, setFollowUpDismissed] = useState(false);
 
-  const run = useCaseRun(caseData.caseId, live);
+  const run = useCaseRun(caseData.caseId, live, {
+    getStored: () =>
+      readBrowserState().cases.find((c) => c.caseId === caseData.caseId) ?? currentCase,
+    onDone: (stored) => {
+      updateBrowserState((s) => ({
+        ...s,
+        cases: s.cases.some((c) => c.caseId === stored.caseId)
+          ? s.cases.map((c) => (c.caseId === stored.caseId ? stored : c))
+          : [...s.cases, stored],
+      }));
+      setCurrentCase(stored);
+      onCaseUpdated?.(stored);
+    },
+  });
   const runActive = live || run.status !== "idle";
 
   useEffect(() => {
@@ -354,19 +370,41 @@ export function CaseReviewPage(props: CaseReviewPageProps): React.JSX.Element {
     setLastError(null);
     setPending(true);
     try {
-      const res = await onReviewAction(result.value);
-      if (res.error) {
-        setLastError(res.error);
-        return false;
-      }
-      if (res.case) {
-        setCurrentCase(res.case);
-        setEditing(false);
-      }
+      const current = readBrowserState();
+      const { state: next, updatedCase } = await applyReview(
+        current,
+        result.value,
+        { memoryClient: null },
+      );
+      updateBrowserState(() => next);
+      setCurrentCase(updatedCase);
+      setEditing(false);
+      onCaseUpdated?.(updatedCase);
       return true;
+    } catch (err) {
+      if (err instanceof MaxRevisionsReached) {
+        setLastError("max_revisions_reached");
+      } else if (err instanceof ReviewError) {
+        setLastError(err.code);
+      } else {
+        setLastError("internal");
+      }
+      return false;
     } finally {
       setPending(false);
     }
+  }
+
+  async function undoLearning(learningId: string): Promise<void> {
+    const current = readBrowserState();
+    const result = await applyRevertLearning(current, learningId, { memoryClient: null });
+    if (!result.undone) return;
+    updateBrowserState(() => result.state);
+    const updated = result.state.cases.find((c) => c.caseId === currentCase.caseId);
+    if (updated) {
+      setCurrentCase(updated);
+    }
+    onCaseUpdated?.(updated ?? currentCase);
   }
 
   return (
@@ -376,7 +414,6 @@ export function CaseReviewPage(props: CaseReviewPageProps): React.JSX.Element {
       data-case-state={currentCase.state}
       className="mx-auto grid w-full max-w-[1380px] gap-4 p-4 lg:p-6"
     >
-      {runActive ? <RefreshOnDone done={run.status === "done"} /> : null}
       <CaseHeader caseData={currentCase} />
       {run.status === "error" ? (
         <Alert variant="error" data-field="run-error">
@@ -421,6 +458,8 @@ export function CaseReviewPage(props: CaseReviewPageProps): React.JSX.Element {
             subject={displayEmail.subject}
             currency={currency}
             caseId={caseData.caseId}
+            topic={caseData.topic}
+            truthMode={caseData.truthMode}
             rewriteEnabled={
               currentCase.state === "reviewable" && !pending && !decisionStreaming
             }
@@ -464,7 +503,7 @@ export function CaseReviewPage(props: CaseReviewPageProps): React.JSX.Element {
             record={latestLearningForCase(hindsight, currentCase)}
             learningSaved={currentCase.learningRef !== null}
             reviewed={currentCase.reviewHistory.length > 0}
-            onUndo={onUndoLearning}
+            onUndo={undoLearning}
           />
         </div>
         <div className="order-2 min-w-0 lg:order-none lg:col-span-5 lg:col-start-1 lg:row-start-1">
@@ -495,16 +534,6 @@ export function CaseReviewPage(props: CaseReviewPageProps): React.JSX.Element {
       <RawEvidenceSheet event={selectedEvent} onClose={() => setSelectedEvent(null)} />
     </main>
   );
-}
-
-function RefreshOnDone({ done }: { done: boolean }): null {
-  const router = useRouter();
-  useEffect(() => {
-    if (!done) return;
-    const timer = window.setTimeout(() => router.refresh(), 600);
-    return () => window.clearTimeout(timer);
-  }, [done, router]);
-  return null;
 }
 
 function AgentActivityCard({

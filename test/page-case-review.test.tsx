@@ -163,7 +163,6 @@ function buildPageProps(overrides: Partial<Parameters<typeof CaseReviewPage>[0]>
     confidence: "high",
     alternatives: ["information", "change"],
     followUp: [],
-    onReviewAction: async () => ({ error: null, case: null }),
     ...overrides,
   };
 }
@@ -606,7 +605,6 @@ test("CaseReviewPage: undo control is visible after reject", () => {
       buildPageProps({
         caseData: stored,
         hindsight: [record],
-        onUndoLearning: async () => {},
       }),
     ),
   );
@@ -632,7 +630,6 @@ test("CaseReviewPage: undo control is visible after edit", () => {
       buildPageProps({
         caseData: stored,
         hindsight: [record],
-        onUndoLearning: async () => {},
       }),
     ),
   );
