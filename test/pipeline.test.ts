@@ -1076,6 +1076,63 @@ test("pipeline: a second follow-up reuses prior conversation and does not repeat
   });
 });
 
+test("pipeline: a third follow-up round sends the latest conversation without duplicate turns", async () => {
+  await withTempStore(async (dataDir) => {
+    const stored = await seedCase(dataDir);
+    const fake = makeFakeLlm();
+    fake.setClaims(() =>
+      makeClaims({ missingFields: ["claimed_delay_minutes", "ticket_number"] }),
+    );
+    const followUpConversations: Array<Array<{ role: string; content: string }>> = [];
+    let draftRound = 0;
+    fake.setFollowUpDraft((input) => {
+      draftRound += 1;
+      const conversationJson = (input as { conversationJson?: string }).conversationJson ?? "[]";
+      followUpConversations.push(
+        JSON.parse(conversationJson) as Array<{ role: string; content: string }>,
+      );
+      return {
+        message: `Draft turn ${draftRound}`,
+        requestedFields: [],
+      };
+    });
+    await collectEvents(stored.caseId, {
+      dataDir,
+      runId: "run-1",
+      indexPath: REPO_KNOWLEDGE_INDEX,
+      llm: fake.client,
+    });
+
+    fake.setInterpret(() => ({ intent: "question", answers: [] }));
+    const roundStages: string[][] = [];
+    for (const [index, runId] of ["run-resume-1", "run-resume-2"].entries()) {
+      const stages: string[] = [];
+      for await (const ev of resumeCase(
+        stored.caseId,
+        { message: `User turn ${index + 1}` },
+        {
+          dataDir,
+          runId,
+          indexPath: REPO_KNOWLEDGE_INDEX,
+          llm: fake.client,
+        },
+      )) {
+        stages.push(`${ev.stage}:${ev.status}`);
+      }
+      roundStages.push(stages);
+    }
+    assert.ok(roundStages.every((stages) => stages.includes("reviewable:completed")));
+    assert.equal(draftRound, 3);
+    const contents = followUpConversations[2].map((t) => t.content);
+    assert.equal(
+      new Set(contents).size,
+      contents.length,
+      "round-3 draft context must not contain duplicate turns",
+    );
+    assert.deepEqual(contents, ["Draft turn 1", "User turn 1", "Draft turn 2", "User turn 2"]);
+  });
+});
+
 test("pipeline: resume with legacy { answers } body still applies supplements", async () => {
   await withTempStore(async (dataDir) => {
     const stored = await seedCase(dataDir);
