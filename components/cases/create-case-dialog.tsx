@@ -1,13 +1,11 @@
 "use client";
 
-import { useContext, useEffect, useRef, useState } from "react";
-import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
+import { useEffect, useRef, useState } from "react";
 import { CircleCheck } from "lucide-react";
 
 import { Shimmer } from "../beui/atoms/Shimmer.tsx";
 import { Button } from "../ui/button.tsx";
 import { createDemoCase } from "../../lib/domain/case-factory.ts";
-import { caseHref } from "../../lib/domain/case-url.ts";
 import type { DemoCasePackage } from "../../lib/domain/types.ts";
 import type { EmailDraft } from "../../lib/llm/types.ts";
 import { isCaseTopic, isTruthMode } from "../../app/api/_shared/validation.ts";
@@ -31,7 +29,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../ui/select.tsx";
-import { toastManager } from "../ui/toast.tsx";
 import { StatefulButton } from "../motion/button/stateful.tsx";
 
 export type TopicOption = {
@@ -113,7 +110,7 @@ type FetchImpl = (
 
 const defaultFetch: FetchImpl = (url, init) => fetch(url, init);
 
-type FormStatus = "idle" | "feeding" | "success" | "error";
+type FormStatus = "idle" | "feeding" | "error";
 
 export const CREATE_FEED_LINES: ReadonlyArray<string> = [
   "Creating passenger profile…",
@@ -249,7 +246,6 @@ export function CreateCaseForm({
         timers.push(
           setTimeout(() => {
             if (cancelled) return;
-            setStatus("success");
             onCreatedRef.current(stored);
           }, 350),
         );
@@ -276,33 +272,6 @@ export function CreateCaseForm({
       <DialogPanel className="enter-fade-up flex flex-col gap-2 py-4">
         <p className="m-0 font-bold text-[color:var(--text)]">Setting up the demo case</p>
         <CreateLoadingFeed doneCount={feedDone} />
-      </DialogPanel>
-    );
-  }
-
-  if (status === "success") {
-    return (
-      <DialogPanel
-        data-testid="create-success"
-        className="flex flex-col items-center gap-4 py-8 text-center"
-      >
-        <span className="t-success-check" data-state="in" aria-hidden="true">
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="var(--primary)"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="size-12"
-          >
-            <path d="M20 6 9 17l-5-5" />
-          </svg>
-        </span>
-        <p className="font-bold text-[color:var(--text)]">Case created</p>
-        <p className="text-sm text-[color:var(--text-muted)]">
-          Opening the review workspace…
-        </p>
       </DialogPanel>
     );
   }
@@ -408,34 +377,9 @@ export function CreateCaseDialog({
   onCaseCreated,
   fetchImpl,
 }: CreateCaseDialogProps) {
-  const router = useContext(AppRouterContext);
-  const navigateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(
-    () => () => {
-      if (navigateTimer.current) clearTimeout(navigateTimer.current);
-    },
-    [],
-  );
-
   function handleCreated(stored: StoredCase) {
-    toastManager.add({
-      type: "success",
-      title: "Case created",
-      description: "Opening the review workspace",
-    });
-    const href = caseHref(stored);
-    navigateTimer.current = setTimeout(() => {
-      if (onCaseCreated) {
-        onCaseCreated(stored.caseId);
-        return;
-      }
-      if (router) {
-        router.push(href);
-      } else if (typeof window !== "undefined") {
-        window.location.assign(href);
-      }
-    }, 900);
+    onCaseCreated?.(stored.caseId);
+    onOpenChange(false);
   }
 
   return (
