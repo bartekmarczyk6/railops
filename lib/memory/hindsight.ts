@@ -77,7 +77,14 @@ export type HindsightLike = {
 };
 
 let listener: MemoryTraceListener | null = null;
-let tombstoneStore: TombstoneStore = createTombstoneStore(".railops/memory/tombstones.json");
+
+function defaultTombstoneStorePath(): string {
+  return process.env.VERCEL
+    ? "/tmp/railops/memory/tombstones.json"
+    : ".railops/memory/tombstones.json";
+}
+
+let tombstoneStore: TombstoneStore = createTombstoneStore(defaultTombstoneStorePath());
 
 export function setMemoryTraceListener(next: MemoryTraceListener | null): void {
   listener = next;
@@ -89,7 +96,7 @@ export function setTombstoneStore(store: TombstoneStore): void {
 
 export function resetMemoryAdapter(): void {
   listener = null;
-  tombstoneStore = createTombstoneStore(".railops/memory/tombstones.json");
+  tombstoneStore = createTombstoneStore(defaultTombstoneStorePath());
 }
 
 function emit(event: MemoryTraceEvent): void {
