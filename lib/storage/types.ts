@@ -36,6 +36,7 @@ export type PipelineStage =
   | "evaluating_rules"
   | "drafting"
   | "critiquing"
+  | "follow_up"
   | "reviewable"
   | "revising"
   | "learning_saved";

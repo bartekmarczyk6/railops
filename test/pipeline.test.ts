@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 
 import { createDemoCase } from "../lib/domain/case-factory.ts";
 import { updateState, readState, resetState } from "../lib/storage/store.ts";
-import type { StoredCase } from "../lib/storage/types.ts";
+import type { StoredCase, TraceEvent } from "../lib/storage/types.ts";
 import type {
   EmailDraft,
   ExtractedClaims,
@@ -20,6 +20,7 @@ import { runCase, resumeCase, MaxRevisionsReached, PipelineError, ReviewError } 
 import { reviewCase, type ReviewInput } from "../lib/pipeline/review.ts";
 import type { LlmClient } from "../lib/pipeline/run-case.ts";
 import type { RunCaseOptions } from "../lib/pipeline/run-case.ts";
+import type { FollowUpDraft, FollowUpInterpretation } from "../lib/llm/types.ts";
 
 function withTempStore<T>(fn: (dataDir: string) => Promise<T> | T): Promise<T> {
   const dir = mkdtempSync(join(tmpdir(), "railops-pipe-"));
@@ -84,15 +85,38 @@ type FakeLlm = {
   setClaims(fn: () => Promise<ExtractedClaims> | ExtractedClaims): void;
   setDraft(fn: () => Promise<DecisionDraft> | DecisionDraft): void;
   setCritique(fn: () => Promise<CritiqueReport> | CritiqueReport): void;
-  callCounts: { email: number; claims: number; draft: number; critique: number };
+  setInterpret(fn: () => Promise<FollowUpInterpretation> | FollowUpInterpretation): void;
+  setFollowUpDraft(fn: (input: { claimsJson: string }) => Promise<FollowUpDraft> | FollowUpDraft): void;
+  setFollowUpDraftError(fn: () => Error): void;
+  callCounts: { email: number; claims: number; draft: number; critique: number; interpret: number; followUp: number };
 };
 
 function makeFakeLlm(): FakeLlm {
-  const callCounts = { email: 0, claims: 0, draft: 0, critique: 0 };
+  const callCounts = { email: 0, claims: 0, draft: 0, critique: 0, interpret: 0, followUp: 0 };
   let emailImpl = async (): Promise<EmailDraft> => makeEmail();
   let claimsImpl = async (): Promise<ExtractedClaims> => makeClaims();
   let draftImpl = async (): Promise<DecisionDraft> => makeDecision();
   let critiqueImpl = async (): Promise<CritiqueReport> => makeCritique();
+  let interpretImpl = async (
+    input: { claimsJson: string; messageText: string },
+  ): Promise<FollowUpInterpretation> => {
+    let parsedClaims: { missingFields?: string[] } = {};
+    try {
+      parsedClaims = JSON.parse(input.claimsJson);
+    } catch {
+      parsedClaims = {};
+    }
+    const missing = parsedClaims.missingFields ?? [];
+    return {
+      intent: "answer",
+      answers: missing.map((field) => ({ field, value: input.messageText })),
+    };
+  };
+  let followUpImpl = async (_input?: { claimsJson: string }): Promise<FollowUpDraft> => ({
+    message: "Could you share the missing details?",
+    requestedFields: [],
+  });
+  let followUpError: (() => Error) | null = null;
   const client: LlmClient = {
     generateCustomerEmail: async (_input, signal) => {
       callCounts.email += 1;
@@ -122,6 +146,21 @@ function makeFakeLlm(): FakeLlm {
       }
       return critiqueImpl();
     },
+    interpretFollowUp: async (input, signal) => {
+      callCounts.interpret += 1;
+      if (signal?.aborted) {
+        throw new Error("aborted");
+      }
+      return interpretImpl({ claimsJson: input.claimsJson, messageText: input.messageText });
+    },
+    draftFollowUp: async (input, signal) => {
+      callCounts.followUp += 1;
+      if (signal?.aborted) {
+        throw new Error("aborted");
+      }
+      if (followUpError) throw followUpError();
+      return followUpImpl(input);
+    },
   };
   return {
     client,
@@ -137,6 +176,16 @@ function makeFakeLlm(): FakeLlm {
     },
     setCritique: (fn) => {
       critiqueImpl = async () => fn();
+    },
+    setInterpret: (fn) => {
+      interpretImpl = async () => fn();
+    },
+    setFollowUpDraft: (fn) => {
+      followUpError = null;
+      followUpImpl = async (input) => (input ? fn(input) : fn({ claimsJson: "{}" }));
+    },
+    setFollowUpDraftError: (fn) => {
+      followUpError = fn;
     },
   };
 }
@@ -788,5 +837,297 @@ test("pipeline: resumeCase on a non-follow-up case throws PipelineError invalid_
       },
       (err: unknown) => err instanceof PipelineError && err.code === "invalid_state",
     );
+  });
+});
+
+test("pipeline: initial follow-up emits an AI message, draft conversation, and follow_up outcome", async () => {
+  await withTempStore(async (dataDir) => {
+    const stored = await seedCase(dataDir);
+    const fake = makeFakeLlm();
+    fake.setClaims(() => makeClaims({ missingFields: ["claimed_delay_minutes"] }));
+    fake.setFollowUpDraft(() => ({
+      message: "Could you share the delay minutes?",
+      requestedFields: ["claimed_delay_minutes"],
+    }));
+    const { state } = await collectEvents(stored.caseId, {
+      dataDir,
+      runId: "run-1",
+      indexPath: REPO_KNOWLEDGE_INDEX,
+      llm: fake.client,
+    });
+    const followUpCompleted = state.events
+      .filter((e) => e.caseId === stored.caseId && e.stage === "follow_up" && e.status === "completed")
+      .at(-1);
+    assert.ok(followUpCompleted, "follow_up:completed must be emitted");
+    const followUpPayload = followUpCompleted?.payload as {
+      followUp?: { message?: string; requestedFields?: string[] };
+      conversation?: Array<{ role: string; content: string }>;
+    };
+    assert.equal(followUpPayload.followUp?.message, "Could you share the delay minutes?");
+    assert.deepEqual(followUpPayload.followUp?.requestedFields, ["claimed_delay_minutes"]);
+    const reviewable = state.events
+      .filter((e) => e.caseId === stored.caseId && e.stage === "reviewable" && e.status === "completed")
+      .at(-1);
+    const rPayload = reviewable?.payload as {
+      outcome?: string;
+      followUp?: { message?: string; requestedFields?: string[] };
+      conversation?: Array<{ role: string; content: string }>;
+    };
+    assert.equal(rPayload.outcome, "follow_up");
+    assert.equal(rPayload.followUp?.message, "Could you share the delay minutes?");
+    assert.deepEqual(rPayload.followUp?.requestedFields, ["claimed_delay_minutes"]);
+    assert.equal(rPayload.conversation?.[0]?.role, "agent");
+    assert.equal(rPayload.conversation?.[0]?.content, "Could you share the delay minutes?");
+  });
+});
+
+test("pipeline: resume with a direct free-form answer resolves a follow-up case without a structured form", async () => {
+  await withTempStore(async (dataDir) => {
+    const stored = await seedCase(dataDir);
+    const fake = makeFakeLlm();
+    fake.setClaims(() => makeClaims({ missingFields: ["claimed_delay_minutes"] }));
+    const first = await collectEvents(stored.caseId, {
+      dataDir,
+      runId: "run-1",
+      indexPath: REPO_KNOWLEDGE_INDEX,
+      llm: fake.client,
+    });
+    assert.equal(first.state.cases.find((c) => c.caseId === stored.caseId)?.state, "reviewable");
+
+    fake.setInterpret(() => ({
+      intent: "answer",
+      answers: [{ field: "claimed_delay_minutes", value: "45" }],
+    }));
+
+    const events: Array<{ stage: string; status: string }> = [];
+    for await (const ev of resumeCase(
+      stored.caseId,
+      { message: "It was 45 minutes late" },
+      {
+        dataDir,
+        runId: "run-resume",
+        indexPath: REPO_KNOWLEDGE_INDEX,
+        llm: fake.client,
+      },
+    )) {
+      events.push({ stage: ev.stage, status: ev.status });
+    }
+    const stages = events.map((e) => `${e.stage}:${e.status}`);
+    assert.ok(stages.includes("drafting:completed"), "free-form answer must draft a decision");
+    assert.equal(stages[stages.length - 1], "reviewable:completed");
+    assert.equal(stages[0], "evaluating_rules:started");
+
+    const state = await readState({ dataDir });
+    const finalCase = state.cases.find((c) => c.caseId === stored.caseId);
+    assert.equal(finalCase?.state, "reviewable");
+    assert.deepEqual(finalCase?.supplements, { claimed_delay_minutes: "45" });
+    assert.equal(fake.callCounts.interpret, 1);
+  });
+});
+
+test("pipeline: resume with a reviewer question produces no supplements and asks the next missing field", async () => {
+  await withTempStore(async (dataDir) => {
+    const stored = await seedCase(dataDir);
+    const fake = makeFakeLlm();
+    fake.setClaims(() => makeClaims({ missingFields: ["claimed_delay_minutes"] }));
+    await collectEvents(stored.caseId, {
+      dataDir,
+      runId: "run-1",
+      indexPath: REPO_KNOWLEDGE_INDEX,
+      llm: fake.client,
+    });
+
+    fake.setInterpret(() => ({ intent: "question", answers: [] }));
+    fake.setFollowUpDraft(() => ({
+      message: "Could you share the delay minutes?",
+      requestedFields: ["claimed_delay_minutes"],
+    }));
+
+    const events: Array<{ stage: string; status: string }> = [];
+    for await (const ev of resumeCase(
+      stored.caseId,
+      { message: "Which rule applies here?" },
+      {
+        dataDir,
+        runId: "run-resume",
+        indexPath: REPO_KNOWLEDGE_INDEX,
+        llm: fake.client,
+      },
+    )) {
+      events.push({ stage: ev.stage, status: ev.status });
+    }
+    const stages = events.map((e) => `${e.stage}:${e.status}`);
+    assert.ok(stages.includes("follow_up:completed"), "question intent produces a follow-up");
+    assert.ok(stages.includes("reviewable:completed"));
+    const state = await readState({ dataDir });
+    const lastReviewable = state.events
+      .filter(
+        (e) =>
+          e.caseId === stored.caseId &&
+          e.runId === "run-resume" &&
+          e.stage === "reviewable" &&
+          e.status === "completed",
+      )
+      .at(-1);
+    const payload = lastReviewable?.payload as { outcome?: string; followUp?: { message?: string } };
+    assert.equal(payload.outcome, "follow_up");
+    assert.equal(payload.followUp?.message, "Could you share the delay minutes?");
+
+    const finalCase = state.cases.find((c) => c.caseId === stored.caseId);
+    assert.deepEqual(finalCase?.supplements, {});
+    assert.equal(finalCase?.state, "reviewable");
+  });
+});
+
+test("pipeline: resume ignores answer candidates whose field is not in current missing fields", async () => {
+  await withTempStore(async (dataDir) => {
+    const stored = await seedCase(dataDir);
+    const fake = makeFakeLlm();
+    fake.setClaims(() => makeClaims({ missingFields: ["claimed_delay_minutes"] }));
+    await collectEvents(stored.caseId, {
+      dataDir,
+      runId: "run-1",
+      indexPath: REPO_KNOWLEDGE_INDEX,
+      llm: fake.client,
+    });
+
+    fake.setInterpret(() => ({
+      intent: "answer",
+      answers: [
+        { field: "not_a_real_field", value: "ignored" },
+        { field: "claimed_delay_minutes", value: "30" },
+      ],
+    }));
+
+    const events: Array<{ stage: string; status: string }> = [];
+    for await (const ev of resumeCase(
+      stored.caseId,
+      { message: "It was 30 minutes" },
+      {
+        dataDir,
+        runId: "run-resume",
+        indexPath: REPO_KNOWLEDGE_INDEX,
+        llm: fake.client,
+      },
+    )) {
+      events.push({ stage: ev.stage, status: ev.status });
+    }
+    const state = await readState({ dataDir });
+    const finalCase = state.cases.find((c) => c.caseId === stored.caseId);
+    assert.deepEqual(finalCase?.supplements, { claimed_delay_minutes: "30" });
+  });
+});
+
+test("pipeline: a second follow-up reuses prior conversation and does not repeat answered fields", async () => {
+  await withTempStore(async (dataDir) => {
+    const stored = await seedCase(dataDir);
+    const fake = makeFakeLlm();
+    fake.setClaims(() =>
+      makeClaims({ missingFields: ["claimed_delay_minutes", "ticket_number"] }),
+    );
+    fake.setFollowUpDraft(
+      ({ claimsJson }) => {
+        let parsedClaims: { missingFields?: string[] } = {};
+        try {
+          parsedClaims = JSON.parse(claimsJson);
+        } catch {
+          parsedClaims = {};
+        }
+        const missing = parsedClaims.missingFields ?? [];
+        return {
+          message: `Please share ${missing.join(", ") || "the missing details"}.`,
+          requestedFields: missing.slice(0, 3),
+        };
+      },
+    );
+    await collectEvents(stored.caseId, {
+      dataDir,
+      runId: "run-1",
+      indexPath: REPO_KNOWLEDGE_INDEX,
+      llm: fake.client,
+    });
+
+    fake.setInterpret(() => ({
+      intent: "answer",
+      answers: [{ field: "claimed_delay_minutes", value: "45" }],
+    }));
+    const resume1Events: TraceEvent[] = [];
+    for await (const ev of resumeCase(
+      stored.caseId,
+      { message: "It was 45 minutes" },
+      {
+        dataDir,
+        runId: "run-resume-1",
+        indexPath: REPO_KNOWLEDGE_INDEX,
+        llm: fake.client,
+      },
+    )) {
+      resume1Events.push(ev);
+    }
+    const followUp1 = resume1Events.find(
+      (e) => e.stage === "follow_up" && e.status === "completed",
+    );
+    const payload1 = followUp1?.payload as {
+      followUp?: { requestedFields?: string[] };
+      conversation?: Array<{ role: string; content: string }>;
+    };
+    assert.deepEqual(payload1.followUp?.requestedFields, ["ticket_number"]);
+    assert.ok(
+      payload1.conversation?.some((t) => t.role === "user" && t.content === "It was 45 minutes"),
+    );
+  });
+});
+
+test("pipeline: resume with legacy { answers } body still applies supplements", async () => {
+  await withTempStore(async (dataDir) => {
+    const stored = await seedCase(dataDir);
+    const fake = makeFakeLlm();
+    fake.setClaims(() => makeClaims({ missingFields: ["claimed_delay_minutes"] }));
+    await collectEvents(stored.caseId, {
+      dataDir,
+      runId: "run-1",
+      indexPath: REPO_KNOWLEDGE_INDEX,
+      llm: fake.client,
+    });
+    const events: Array<{ stage: string; status: string }> = [];
+    for await (const ev of resumeCase(
+      stored.caseId,
+      { claimed_delay_minutes: "45" },
+      {
+        dataDir,
+        runId: "run-resume",
+        indexPath: REPO_KNOWLEDGE_INDEX,
+        llm: fake.client,
+      },
+    )) {
+      events.push({ stage: ev.stage, status: ev.status });
+    }
+    const state = await readState({ dataDir });
+    const finalCase = state.cases.find((c) => c.caseId === stored.caseId);
+    assert.deepEqual(finalCase?.supplements, { claimed_delay_minutes: "45" });
+  });
+});
+
+test("pipeline: failed follow-up call does not mutate supplements or mark case resolved", async () => {
+  await withTempStore(async (dataDir) => {
+    const stored = await seedCase(dataDir);
+    const fake = makeFakeLlm();
+    fake.setClaims(() => makeClaims({ missingFields: ["claimed_delay_minutes"] }));
+    fake.setFollowUpDraftError(() => new Error("provider offline"));
+    const events: Array<{ stage: string; status: string }> = [];
+    for await (const ev of runCase(stored.caseId, {
+      dataDir,
+      runId: "run-1",
+      indexPath: REPO_KNOWLEDGE_INDEX,
+      llm: fake.client,
+    })) {
+      events.push({ stage: ev.stage, status: ev.status });
+    }
+    const state = await readState({ dataDir });
+    const finalCase = state.cases.find((c) => c.caseId === stored.caseId);
+    assert.equal(finalCase?.state, "error");
+    assert.deepEqual(finalCase?.supplements, {});
+    const failed = events.find((e) => e.stage === "follow_up" && e.status === "failed");
+    assert.ok(failed, "follow_up must emit a failed event");
   });
 });

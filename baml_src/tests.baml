@@ -49,3 +49,27 @@ test CritiqueDecisionShape {
   }
   @@assert({{ this.findings is sequence }})
 }
+
+test InterpretFollowUpShape {
+  functions [InterpretFollowUp]
+  args {
+    caseJson #"{"id":"c1","topic":"delay_refund","truthMode":"insufficient_information"}"#
+    claimsJson #"{"requestedAction":"refund","claims":[],"missingFields":["claimed_delay_minutes"],"referencedTicketNumbers":[],"referencedStations":[]}"#
+    conversationJson #"[]"#
+    messageText "It was about 45 minutes."
+  }
+  @@assert({{ this.answers is sequence }})
+}
+
+test DraftFollowUpShape {
+  functions [DraftFollowUp]
+  args {
+    caseJson #"{"id":"c1","topic":"delay_refund","truthMode":"insufficient_information"}"#
+    claimsJson #"{"requestedAction":"refund","claims":[],"missingFields":["claimed_delay_minutes"],"referencedTicketNumbers":[],"referencedStations":[]}"#
+    rulesJson #"{"outcome":"follow_up_required","amount":null,"reasons":[],"evidenceRefs":[]}"#
+    knowledgeJson #"[]"#
+    memoryJson #"{"topic":"delay_refund","reviewerGuidance":[],"source":"none"}"#
+    conversationJson #"[]"#
+  }
+  @@assert({{ this.message|length > 0 }})
+}

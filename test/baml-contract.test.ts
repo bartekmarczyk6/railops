@@ -7,6 +7,8 @@ import {
   draftDecision,
   critiqueDecision,
   rewriteResponseText,
+  interpretFollowUp,
+  draftFollowUp,
   setBamlClientForTesting,
   resetBamlClientForTesting,
   LlmError,
@@ -43,12 +45,22 @@ function makeRawCaller(overrides: Partial<RawBamlCaller> = {}): RawBamlCaller {
   const rewrite = {
     rewrittenSelection: "Rewritten selection text.",
   };
+  const interpretation = {
+    intent: "Answer",
+    answers: [{ field: "claimed_delay_minutes", value: "45" }],
+  };
+  const followUpDraft = {
+    message: "Could you confirm the delay minutes?",
+    requestedFields: ["claimed_delay_minutes"],
+  };
   return {
     GenerateCustomerEmail: overrides.GenerateCustomerEmail ?? (async () => emailDraft),
     ExtractCaseClaims: overrides.ExtractCaseClaims ?? (async () => claims),
     DraftDecision: overrides.DraftDecision ?? (async () => decision),
     CritiqueDecision: overrides.CritiqueDecision ?? (async () => critique),
     RewriteResponseText: overrides.RewriteResponseText ?? (async () => rewrite),
+    InterpretFollowUp: overrides.InterpretFollowUp ?? (async () => interpretation),
+    DraftFollowUp: overrides.DraftFollowUp ?? (async () => followUpDraft),
   };
 }
 
@@ -280,4 +292,158 @@ test("baml: validation-style error from caller is mapped to LlmError", async () 
 
 test("baml: resetBamlEnvVars is callable without throwing", () => {
   assert.doesNotThrow(() => resetBamlEnvVars({ GROQ_API_KEY: "x" }));
+});
+
+test("baml: interpretFollowUp maps intent and answers through raw mock caller", async () => {
+  setBamlClientForTesting(makeRawCaller());
+  const result = await interpretFollowUp(
+    {
+      casePackageJson: "{}",
+      claimsJson: "{}",
+      conversationJson: "[]",
+      messageText: "It was 45 minutes.",
+    },
+    new AbortController().signal,
+  );
+  assert.equal(result.intent, "answer");
+  assert.equal(result.answers.length, 1);
+  assert.equal(result.answers[0]?.field, "claimed_delay_minutes");
+  assert.equal(result.answers[0]?.value, "45");
+});
+
+test("baml: interpretFollowUp rejects unsupported intent", async () => {
+  setBamlClientForTesting(
+    makeRawCaller({
+      InterpretFollowUp: async () => ({ intent: "BogusIntent", answers: [] }),
+    }),
+  );
+  await assert.rejects(
+    () =>
+      interpretFollowUp(
+        {
+          casePackageJson: "{}",
+          claimsJson: "{}",
+          conversationJson: "[]",
+          messageText: "x",
+        },
+        new AbortController().signal,
+      ),
+    (err: unknown) => err instanceof LlmError && err.code === "invalid_shape",
+  );
+});
+
+test("baml: interpretFollowUp filters malformed answer objects but keeps valid ones", async () => {
+  setBamlClientForTesting(
+    makeRawCaller({
+      InterpretFollowUp: async () => ({
+        intent: "Answer",
+        answers: [
+          { field: "claimed_delay_minutes", value: "45" },
+          { field: "", value: "skip" },
+          { field: "ignored", value: "" },
+          { not: "an object" },
+          "string-not-object",
+          null,
+        ],
+      }),
+    }),
+  );
+  const result = await interpretFollowUp(
+    {
+      casePackageJson: "{}",
+      claimsJson: "{}",
+      conversationJson: "[]",
+      messageText: "x",
+    },
+    new AbortController().signal,
+  );
+  assert.equal(result.answers.length, 1);
+  assert.equal(result.answers[0]?.value, "45");
+});
+
+test("baml: interpretFollowUp rejects question intent carrying answers", async () => {
+  setBamlClientForTesting(
+    makeRawCaller({
+      InterpretFollowUp: async () => ({
+        intent: "Question",
+        answers: [{ field: "claimed_delay_minutes", value: "45" }],
+      }),
+    }),
+  );
+  await assert.rejects(
+    () =>
+      interpretFollowUp(
+        {
+          casePackageJson: "{}",
+          claimsJson: "{}",
+          conversationJson: "[]",
+          messageText: "x",
+        },
+        new AbortController().signal,
+      ),
+    (err: unknown) => err instanceof LlmError && err.code === "invalid_shape",
+  );
+});
+
+test("baml: draftFollowUp maps message and requestedFields through raw mock caller", async () => {
+  setBamlClientForTesting(makeRawCaller());
+  const result = await draftFollowUp(
+    {
+      casePackageJson: "{}",
+      claimsJson: "{}",
+      rulesJson: "{}",
+      knowledgeJson: "[]",
+      memoryJson: "{}",
+      conversationJson: "[]",
+    },
+    new AbortController().signal,
+  );
+  assert.equal(result.message, "Could you confirm the delay minutes?");
+  assert.deepEqual(result.requestedFields, ["claimed_delay_minutes"]);
+});
+
+test("baml: draftFollowUp rejects empty message", async () => {
+  setBamlClientForTesting(
+    makeRawCaller({
+      DraftFollowUp: async () => ({ message: "", requestedFields: [] }),
+    }),
+  );
+  await assert.rejects(
+    () =>
+      draftFollowUp(
+        {
+          casePackageJson: "{}",
+          claimsJson: "{}",
+          rulesJson: "{}",
+          knowledgeJson: "[]",
+          memoryJson: "{}",
+          conversationJson: "[]",
+        },
+        new AbortController().signal,
+      ),
+    (err: unknown) => err instanceof LlmError && err.code === "invalid_shape",
+  );
+});
+
+test("baml: draftFollowUp preserves exact requestedFields order", async () => {
+  setBamlClientForTesting(
+    makeRawCaller({
+      DraftFollowUp: async () => ({
+        message: "follow-up",
+        requestedFields: ["claimed_delay_minutes", "ticket_number"],
+      }),
+    }),
+  );
+  const result = await draftFollowUp(
+    {
+      casePackageJson: "{}",
+      claimsJson: "{}",
+      rulesJson: "{}",
+      knowledgeJson: "[]",
+      memoryJson: "{}",
+      conversationJson: "[]",
+    },
+    new AbortController().signal,
+  );
+  assert.deepEqual(result.requestedFields, ["claimed_delay_minutes", "ticket_number"]);
 });

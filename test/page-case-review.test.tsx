@@ -752,6 +752,45 @@ function makeFollowUpCase(): StoredCase {
   return makeStoredCase({ state: "reviewable", trace });
 }
 
+function makeFollowUpCaseWithMessage(): StoredCase {
+  const payloadClaims: ExtractedClaims = {
+    requestedAction: "refund",
+    claims: [],
+    missingFields: ["ticket_number"],
+    referencedTicketNumbers: [],
+    referencedStations: [],
+  };
+  const trace: TraceEvent[] = [
+    makeEvent({
+      id: "f-1",
+      sequence: 1,
+      stage: "extracting_claims",
+      status: "completed",
+      summary: "Claims extracted",
+      payload: payloadClaims,
+    }),
+    makeEvent({
+      id: "f-2",
+      sequence: 2,
+      stage: "reviewable",
+      status: "completed",
+      summary: "Follow-up required",
+      payload: {
+        outcome: "follow_up",
+        draft: null,
+        rules: null,
+        claims: payloadClaims,
+        knowledgeCount: 0,
+        followUp: {
+          message: "Could you share the ticket number so I can keep going?",
+          requestedFields: ["ticket_number"],
+        },
+      },
+    }),
+  ];
+  return makeStoredCase({ state: "reviewable", trace });
+}
+
 test("CaseReviewPage: follow-up case renders the question card with a question per missing field", () => {
   const stored = makeFollowUpCase();
   const html = renderToStaticMarkup(
@@ -771,6 +810,30 @@ test("CaseReviewPage: complete reviewable case keeps the approve buttons (no que
   );
   assert.doesNotMatch(html, /data-component="follow-up-card"/);
   assert.match(html, /data-action="approve"/);
+});
+
+test("CaseReviewPage: follow-up payload with AI message renders the agent message and uses requested fields", () => {
+  const stored = makeFollowUpCaseWithMessage();
+  const html = renderToStaticMarkup(
+    createElement(CaseReviewPage, buildPageProps({ caseData: stored })),
+  );
+  assert.match(html, /data-component="follow-up-card"/);
+  assert.match(html, /data-field="agent-message"/);
+  assert.match(html, /Could you share the ticket number/);
+  assert.match(html, /Can you confirm the ticket number\?/);
+  assert.match(html, /data-field="follow-up-reply"/);
+  assert.match(html, /data-action="follow-up-reply"/);
+  assert.match(html, /Reply to agent/);
+});
+
+test("CaseReviewPage: old payload without followUp falls back to claims.missingFields and skips the AI message", () => {
+  const stored = makeFollowUpCase();
+  const html = renderToStaticMarkup(
+    createElement(CaseReviewPage, buildPageProps({ caseData: stored })),
+  );
+  assert.match(html, /data-component="follow-up-card"/);
+  assert.doesNotMatch(html, /data-field="agent-message"/);
+  assert.match(html, /data-field="follow-up-reply"/);
 });
 
 test("buildFollowUpQuestions: ticket-ish fields get ticket options, station-ish fields get stations, others free text", () => {
@@ -819,4 +882,26 @@ test("buildRunRequest: resume body is POSTed as JSON, plain run has no body", ()
   assert.equal(plain.url, "/api/cases/case-1/run");
   assert.equal(plain.init.method, "POST");
   assert.equal(plain.init.body, undefined);
+});
+
+test("buildRunRequest: serializes a free-form message body as JSON", () => {
+  const resume = buildRunRequest("case-1", { message: "It was 45 minutes" });
+  const headers = resume.init.headers as Record<string, string>;
+  assert.equal(headers["content-type"], "application/json");
+  assert.deepEqual(JSON.parse(String(resume.init.body)), {
+    message: "It was 45 minutes",
+  });
+});
+
+test("buildRunRequest: serializes both message and answers when provided together", () => {
+  const resume = buildRunRequest("case-1", {
+    message: "It was 45 minutes",
+    answers: { claimed_delay_minutes: "ignored" },
+  });
+  const headers = resume.init.headers as Record<string, string>;
+  assert.equal(headers["content-type"], "application/json");
+  assert.deepEqual(JSON.parse(String(resume.init.body)), {
+    message: "It was 45 minutes",
+    answers: { claimed_delay_minutes: "ignored" },
+  });
 });

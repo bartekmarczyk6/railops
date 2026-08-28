@@ -8,6 +8,10 @@ import type {
   DecisionDraft,
   EmailDraft,
   ExtractedClaims,
+  FollowUpAnswer,
+  FollowUpDraft,
+  FollowUpIntent,
+  FollowUpInterpretation,
 } from "./types";
 
 export type {
@@ -18,6 +22,10 @@ export type {
   DecisionDraft,
   EmailDraft,
   ExtractedClaims,
+  FollowUpAnswer,
+  FollowUpDraft,
+  FollowUpIntent,
+  FollowUpInterpretation,
 };
 
 export type DecisionOutcome =
@@ -80,6 +88,21 @@ export type RawRewriteResult = {
   rewrittenSelection?: unknown;
 };
 
+export type RawFollowUpInterpretation = {
+  intent?: unknown;
+  answers?: unknown;
+};
+
+export type RawFollowUpDraft = {
+  message?: unknown;
+  requestedFields?: unknown;
+};
+
+export type RawFollowUpAnswer = {
+  field?: unknown;
+  value?: unknown;
+};
+
 export type RawBamlCaller = {
   GenerateCustomerEmail(input: {
     caseJson: string;
@@ -115,6 +138,20 @@ export type RawBamlCaller = {
     instruction: string;
     contextJson: string;
   }): Promise<RawRewriteResult>;
+  InterpretFollowUp?(input: {
+    caseJson: string;
+    claimsJson: string;
+    conversationJson: string;
+    messageText: string;
+  }): Promise<RawFollowUpInterpretation>;
+  DraftFollowUp?(input: {
+    caseJson: string;
+    claimsJson: string;
+    rulesJson: string;
+    knowledgeJson: string;
+    memoryJson: string;
+    conversationJson: string;
+  }): Promise<RawFollowUpDraft>;
 };
 
 export type RawEmailPartial = {
@@ -194,6 +231,12 @@ const SEVERITY_FROM_BAML: Record<string, CriticSeverityName> = {
   Info: "info",
   Warning: "warning",
   Error: "error",
+};
+
+const INTENT_FROM_BAML: Record<string, FollowUpIntent> = {
+  Answer: "answer",
+  Question: "question",
+  Unclear: "unclear",
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -413,6 +456,45 @@ function mapRewriteResult(raw: RawRewriteResult): { rewrittenSelection: string }
   return { rewrittenSelection };
 }
 
+function mapFollowUpAnswer(raw: unknown): FollowUpAnswer | null {
+  if (!isRecord(raw)) return null;
+  const field = asString(raw.field);
+  const value = asString(raw.value);
+  if (field.length === 0 || value.length === 0) return null;
+  return { field, value };
+}
+
+function mapFollowUpInterpretation(raw: RawFollowUpInterpretation): FollowUpInterpretation {
+  if (!isRecord(raw)) {
+    throw new LlmError("invalid_shape", "InterpretFollowUp returned non-object");
+  }
+  const intentRaw = asString(raw.intent);
+  const intent = INTENT_FROM_BAML[intentRaw];
+  if (!intent) {
+    throw new LlmError("invalid_shape", `unsupported follow-up intent: ${intentRaw || "<empty>"}`);
+  }
+  const answersRaw = Array.isArray(raw.answers) ? raw.answers : [];
+  const answers = answersRaw
+    .map(mapFollowUpAnswer)
+    .filter((a): a is FollowUpAnswer => a !== null);
+  if (intent !== "answer" && answers.length > 0) {
+    throw new LlmError(
+      "invalid_shape",
+      `follow-up intent ${intent} must not include answers`,
+    );
+  }
+  return { intent, answers };
+}
+
+function mapFollowUpDraft(raw: RawFollowUpDraft): FollowUpDraft {
+  if (!isRecord(raw)) {
+    throw new LlmError("invalid_shape", "DraftFollowUp returned non-object");
+  }
+  const message = assertString(raw.message, "invalid_shape", "message");
+  const requestedFields = asStringArray(raw.requestedFields);
+  return { message, requestedFields };
+}
+
 type BamlAdapter = {
   generateCustomerEmail(
     caseJson: string,
@@ -453,6 +535,22 @@ type BamlAdapter = {
     contextJson: string,
     signal?: AbortSignal,
   ): Promise<{ rewrittenSelection: string }>;
+  interpretFollowUp?(
+    caseJson: string,
+    claimsJson: string,
+    conversationJson: string,
+    messageText: string,
+    signal?: AbortSignal,
+  ): Promise<FollowUpInterpretation>;
+  draftFollowUp?(
+    caseJson: string,
+    claimsJson: string,
+    rulesJson: string,
+    knowledgeJson: string,
+    memoryJson: string,
+    conversationJson: string,
+    signal?: AbortSignal,
+  ): Promise<FollowUpDraft>;
   streamGenerateCustomerEmail(
     caseJson: string,
     topic: string,
@@ -693,6 +791,54 @@ function buildBamlAdapter(
       });
     };
   }
+  const callInterpret = caller.InterpretFollowUp;
+  if (callInterpret) {
+    adapter.interpretFollowUp = async (caseJson, claimsJson, conversationJson, messageText, signal) => {
+      checkSignal(signal);
+      return withAbort(signal, async () => {
+        try {
+          const raw = await callInterpret({
+            caseJson,
+            claimsJson,
+            conversationJson,
+            messageText,
+          });
+          return mapFollowUpInterpretation(raw);
+        } catch (err) {
+          throw wrapBamlError(err);
+        }
+      });
+    };
+  }
+  const callDraftFollowUp = caller.DraftFollowUp;
+  if (callDraftFollowUp) {
+    adapter.draftFollowUp = async (
+      caseJson,
+      claimsJson,
+      rulesJson,
+      knowledgeJson,
+      memoryJson,
+      conversationJson,
+      signal,
+    ) => {
+      checkSignal(signal);
+      return withAbort(signal, async () => {
+        try {
+          const raw = await callDraftFollowUp({
+            caseJson,
+            claimsJson,
+            rulesJson,
+            knowledgeJson,
+            memoryJson,
+            conversationJson,
+          });
+          return mapFollowUpDraft(raw);
+        } catch (err) {
+          throw wrapBamlError(err);
+        }
+      });
+    };
+  }
   return adapter;
 }
 
@@ -703,12 +849,16 @@ function buildRawCallerFromBamlClient(client: typeof defaultBamlClient): RawBaml
     DraftDecision?: (...args: unknown[]) => Promise<unknown>;
     CritiqueDecision?: (...args: unknown[]) => Promise<unknown>;
     RewriteResponseText?: (...args: unknown[]) => Promise<unknown>;
+    InterpretFollowUp?: (...args: unknown[]) => Promise<unknown>;
+    DraftFollowUp?: (...args: unknown[]) => Promise<unknown>;
   };
   const callGenerateEmail = real.GenerateCustomerEmail;
   const callExtract = real.ExtractCaseClaims;
   const callDraft = real.DraftDecision;
   const callCritique = real.CritiqueDecision;
   const callRewrite = real.RewriteResponseText;
+  const callInterpret = real.InterpretFollowUp;
+  const callDraftFollowUp = real.DraftFollowUp;
   if (
     typeof callGenerateEmail !== "function" ||
     typeof callExtract !== "function" ||
@@ -768,6 +918,28 @@ function buildRawCallerFromBamlClient(client: typeof defaultBamlClient): RawBaml
         input.instruction,
         input.contextJson,
       )) as RawRewriteResult;
+  }
+  if (typeof callInterpret === "function") {
+    caller.InterpretFollowUp = async (input) =>
+      (await callInterpret.call(
+        client,
+        input.caseJson,
+        input.claimsJson,
+        input.conversationJson,
+        input.messageText,
+      )) as RawFollowUpInterpretation;
+  }
+  if (typeof callDraftFollowUp === "function") {
+    caller.DraftFollowUp = async (input) =>
+      (await callDraftFollowUp.call(
+        client,
+        input.caseJson,
+        input.claimsJson,
+        input.rulesJson,
+        input.knowledgeJson,
+        input.memoryJson,
+        input.conversationJson,
+      )) as RawFollowUpDraft;
   }
   return caller;
 }
@@ -1000,6 +1172,56 @@ export async function rewriteResponseText(
     input.selection,
     input.instruction,
     input.contextJson,
+    signal,
+  );
+}
+
+export type InterpretFollowUpInput = {
+  casePackageJson: string;
+  claimsJson: string;
+  conversationJson: string;
+  messageText: string;
+};
+
+export async function interpretFollowUp(
+  input: InterpretFollowUpInput,
+  signal?: AbortSignal,
+): Promise<FollowUpInterpretation> {
+  if (!currentAdapter.interpretFollowUp) {
+    throw new LlmError("unknown", "BAML client does not support InterpretFollowUp");
+  }
+  return currentAdapter.interpretFollowUp(
+    input.casePackageJson,
+    input.claimsJson,
+    input.conversationJson,
+    input.messageText,
+    signal,
+  );
+}
+
+export type DraftFollowUpInput = {
+  casePackageJson: string;
+  claimsJson: string;
+  rulesJson: string;
+  knowledgeJson: string;
+  memoryJson: string;
+  conversationJson: string;
+};
+
+export async function draftFollowUp(
+  input: DraftFollowUpInput,
+  signal?: AbortSignal,
+): Promise<FollowUpDraft> {
+  if (!currentAdapter.draftFollowUp) {
+    throw new LlmError("unknown", "BAML client does not support DraftFollowUp");
+  }
+  return currentAdapter.draftFollowUp(
+    input.casePackageJson,
+    input.claimsJson,
+    input.rulesJson,
+    input.knowledgeJson,
+    input.memoryJson,
+    input.conversationJson,
     signal,
   );
 }

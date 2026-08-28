@@ -23,6 +23,7 @@ const STAGE_LABEL: Record<TraceEvent["stage"], string> = {
   evaluating_rules: "Applying the rules",
   drafting: "Drafting the decision",
   critiquing: "Reviewing the draft",
+  follow_up: "Asking the reviewer",
   reviewable: "Ready for review",
   revising: "Revising the draft",
   learning_saved: "Learning saved",

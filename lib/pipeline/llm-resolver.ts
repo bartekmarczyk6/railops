@@ -87,6 +87,32 @@ function makeFakeLlm(): LlmClient {
     rewriteResponseText: async (input) => ({
       rewrittenSelection: `[${input.instruction}] ${input.selection}`,
     }),
+    interpretFollowUp: async ({ claimsJson, messageText }) => {
+      let parsedClaims: { missingFields?: string[] } = {};
+      try {
+        parsedClaims = JSON.parse(claimsJson);
+      } catch {
+        parsedClaims = {};
+      }
+      const missing = parsedClaims.missingFields ?? [];
+      return {
+        intent: "answer",
+        answers: missing.map((field) => ({ field, value: messageText })),
+      };
+    },
+    draftFollowUp: async ({ claimsJson }) => {
+      let parsedClaims: { missingFields?: string[] } = {};
+      try {
+        parsedClaims = JSON.parse(claimsJson);
+      } catch {
+        parsedClaims = {};
+      }
+      const missing = parsedClaims.missingFields ?? [];
+      return {
+        message: `Could you confirm the ${missing.join(", ") || "missing details"}?`,
+        requestedFields: missing.slice(0, 3),
+      };
+    },
     streamGenerateCustomerEmail: async (_input, onPartial, signal) => {
       await emitGrowingPartials(
         FAKE_EMAIL.body,

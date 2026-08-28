@@ -332,6 +332,32 @@ export function buildMockLlmForPkg(pkg: DemoCasePackage): MockLlmHandle {
       findings: [],
       correctedDraft: null,
     }),
+    interpretFollowUp: async ({ claimsJson, messageText }) => {
+      let parsedClaims: { missingFields?: string[] } = {};
+      try {
+        parsedClaims = JSON.parse(claimsJson);
+      } catch {
+        parsedClaims = {};
+      }
+      const missing = parsedClaims.missingFields ?? [];
+      return {
+        intent: "answer",
+        answers: missing.map((field) => ({ field, value: messageText })),
+      };
+    },
+    draftFollowUp: async ({ claimsJson }) => {
+      let parsedClaims: { missingFields?: string[] } = {};
+      try {
+        parsedClaims = JSON.parse(claimsJson);
+      } catch {
+        parsedClaims = {};
+      }
+      const missing = parsedClaims.missingFields ?? [];
+      return {
+        message: `Could you confirm the ${missing.join(", ") || "missing details"}?`,
+        requestedFields: missing.slice(0, 3),
+      };
+    },
   };
   return { client, email, claims, drafts };
 }

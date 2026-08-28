@@ -51,3 +51,20 @@ export type CritiqueReport = {
   findings: CriticFinding[];
   correctedDraft: DecisionDraft | null;
 };
+
+export type FollowUpIntent = "answer" | "question" | "unclear";
+
+export type FollowUpAnswer = {
+  field: string;
+  value: string;
+};
+
+export type FollowUpInterpretation = {
+  intent: FollowUpIntent;
+  answers: FollowUpAnswer[];
+};
+
+export type FollowUpDraft = {
+  message: string;
+  requestedFields: string[];
+};

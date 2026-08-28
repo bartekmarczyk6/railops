@@ -578,6 +578,73 @@ test("POST /api/cases/:id/run with invalid answers shape returns 400 invalid_inp
   assert.equal((await readError(badValue)).error, "invalid_input");
 });
 
+test("POST /api/cases/:id/run with message serializes the free-form message into a resume", async () => {
+  const stored: StoredCase = { ...makeStoredCase(), state: "reviewable" };
+  const priorEvents = makePriorFollowUpEvents(stored.caseId);
+  const res = await runRequest(stored.caseId, {
+    stored,
+    events: priorEvents,
+    message: "It was 45 minutes",
+  });
+  assert.equal(res.status, 200);
+  const { events: streamed, done } = await readSseStream(res);
+  assert.ok(streamed.length > 0, "message resume must stream events");
+  assert.equal(
+    streamed[0]?.stage,
+    "evaluating_rules",
+    "message resume stream starts at evaluating_rules",
+  );
+  assert.ok(
+    streamed.some((e) => e.stage === "drafting" && e.status === "completed"),
+    "message resume must draft a decision when answered",
+  );
+  assert.ok(done, "done frame must be present");
+  assert.deepEqual(
+    done!.stored.supplements,
+    { claimed_delay_minutes: "It was 45 minutes" },
+    "free-form message must be interpreted into the missing field supplement",
+  );
+});
+
+test("POST /api/cases/:id/run still serializes answers as before when no message is supplied", async () => {
+  const stored: StoredCase = { ...makeStoredCase(), state: "reviewable" };
+  const priorEvents = makePriorFollowUpEvents(stored.caseId);
+  const res = await runRequest(stored.caseId, {
+    stored,
+    events: priorEvents,
+    answers: { claimed_delay_minutes: "45" },
+  });
+  assert.equal(res.status, 200);
+  const { done } = await readSseStream(res);
+  assert.ok(done, "done frame must be present");
+  assert.deepEqual(done!.stored.supplements, { claimed_delay_minutes: "45" });
+});
+
+test("POST /api/cases/:id/run accepts both message and answers in the same body", async () => {
+  const stored: StoredCase = { ...makeStoredCase(), state: "reviewable" };
+  const priorEvents = makePriorFollowUpEvents(stored.caseId);
+  const res = await runRequest(stored.caseId, {
+    stored,
+    events: priorEvents,
+    message: "It was 45 minutes",
+    answers: { claimed_delay_minutes: "ignored" },
+  });
+  assert.equal(res.status, 200);
+  const { done } = await readSseStream(res);
+  assert.ok(done, "done frame must be present");
+  assert.deepEqual(done!.stored.supplements, { claimed_delay_minutes: "It was 45 minutes" });
+});
+
+test("POST /api/cases/:id/run rejects non-string message with 400 invalid_input", async () => {
+  const stored = makeStoredCase();
+  const numberMessage = await runRequest(stored.caseId, { stored, message: 42 });
+  assert.equal(numberMessage.status, 400);
+  assert.equal((await readError(numberMessage)).error, "invalid_input");
+  const arrayMessage = await runRequest(stored.caseId, { stored, message: ["nope"] });
+  assert.equal(arrayMessage.status, 400);
+  assert.equal((await readError(arrayMessage)).error, "invalid_input");
+});
+
 test("POST /api/cases/:id/rewrite with valid body returns 200 and the rewritten selection", async () => {
   const res = await rewriteRequest("case-1", validRewriteBody());
   assert.equal(res.status, 200);
