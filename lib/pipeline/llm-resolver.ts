@@ -13,6 +13,8 @@ import {
   streamGenerateCustomerEmail,
   streamDraftDecision,
   rewriteResponseText,
+  interpretFollowUp,
+  draftFollowUp,
 } from "../llm/baml.ts";
 import type {
   GenerateEmailInput,
@@ -144,6 +146,8 @@ function makeRealLlm(): LlmClient {
     draftDecision: (input, signal) => draftDecision(input, signal),
     critiqueDecision: (input, signal) => critiqueDecision(input, signal),
     rewriteResponseText: (input, signal) => rewriteResponseText(input, signal),
+    interpretFollowUp: (input, signal) => interpretFollowUp(input, signal),
+    draftFollowUp: (input, signal) => draftFollowUp(input, signal),
     streamGenerateCustomerEmail: (input, onPartial, signal) =>
       streamGenerateCustomerEmail(input, onPartial, signal),
     streamDraftDecision: (input, onPartial, signal) =>
