@@ -111,7 +111,7 @@ function reasonFromError(err: unknown): string {
 
 /* Demo branch: reviewer memory is paused. Every call site already handles a
  * null client by degrading to local-only learning. */
-export function getHindsightClient(_env: NodeJS.ProcessEnv = process.env): HindsightLike | null {
+export function getHindsightClient(): HindsightLike | null {
   return null;
 }
 

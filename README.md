@@ -108,8 +108,8 @@ human decision.
 Every approve/reject/edit becomes a PII-minimized learning record. When the
 next case is drafted, relevant guidance from past reviews is recalled into the
 drafting context (via a Hindsight memory bank) — as context, never as truth.
-In the hosted demo this loop is paused; locally it works against a local
-Hindsight server.
+In this demo the loop is paused: feedback is recorded in the case history you
+see on screen, but not stored in a memory bank.
 
 ## How AI is integrated
 
@@ -156,7 +156,8 @@ memory server, initializes the `railops` memory bank, and opens the dashboard:
 - macOS / Linux / Git Bash / WSL: `./scripts/setup.sh` — provided, untested
 
 Both wizards are idempotent — re-run to resume; stages whose artifacts already
-exist are skipped.
+exist are skipped. This demo branch pauses reviewer memory (Hindsight) — the
+memory stages below are only used on the main branch.
 
 ### Manual setup, stage by stage
 
