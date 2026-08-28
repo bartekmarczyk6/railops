@@ -774,13 +774,15 @@ function readPriorConversations(
   events: readonly TraceEvent[],
   currentRunId: string,
 ): FollowUpConversation {
-  const turns: FollowUpConversation = [];
+  let latest: FollowUpConversation = [];
   for (const e of events) {
     if (e.runId === currentRunId) continue;
     if (e.stage !== "reviewable" || e.status !== "completed") continue;
-    turns.push(...readFollowUpConversation(e.payload));
+    const turns = readFollowUpConversation(e.payload);
+    if (turns.length === 0) continue;
+    latest = turns;
   }
-  return capConversation(turns);
+  return capConversation(latest);
 }
 
 function normalizeField(field: string): string {
