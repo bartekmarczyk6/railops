@@ -128,6 +128,66 @@ function makeStoredCase(): StoredCase {
 type DoneFrame = { type: "done"; stored: StoredCase; events: TraceEvent[] };
 type StreamFrameShape = { type: "stream"; stage: string; partial: Record<string, unknown> };
 
+function makePriorFollowUpEvents(caseId: string): TraceEvent[] {
+  const runId = "run-prior";
+  const timestamp = new Date().toISOString();
+  return [
+    {
+      id: "ev-claims",
+      caseId,
+      runId,
+      sequence: 1,
+      stage: "extracting_claims",
+      status: "completed",
+      summary: "Extracted 1 claims; 1 missing",
+      functionName: "ExtractCaseClaims",
+      recordRefs: [],
+      evidenceRefs: [],
+      durationMs: null,
+      error: null,
+      timestamp,
+      payload: {
+        requestedAction: "refund",
+        claims: [{ kind: "delay_minutes", description: "Claimed 45 minute delay", value: 45 }],
+        missingFields: ["claimed_delay_minutes"],
+        referencedTicketNumbers: [],
+        referencedStations: [],
+      },
+    },
+    {
+      id: "ev-records",
+      caseId,
+      runId,
+      sequence: 2,
+      stage: "checking_records",
+      status: "completed",
+      summary: "Captured record references",
+      functionName: "collectRecordRefs",
+      recordRefs: ["record:route:R-1"],
+      evidenceRefs: [],
+      durationMs: null,
+      error: null,
+      timestamp,
+    },
+    {
+      id: "ev-reviewable",
+      caseId,
+      runId,
+      sequence: 3,
+      stage: "reviewable",
+      status: "completed",
+      summary: "Follow-up required: claimed_delay_minutes",
+      functionName: null,
+      recordRefs: [],
+      evidenceRefs: [],
+      durationMs: null,
+      error: null,
+      timestamp,
+      payload: { outcome: "follow_up" },
+    },
+  ];
+}
+
 async function readSseStream(response: Response): Promise<{
   events: TraceEvent[];
   streamFrames: StreamFrameShape[];
@@ -336,7 +396,12 @@ test("POST /api/cases/:id/run streams trace events and ends with a done frame", 
   assert.match(contentType, /text\/event-stream/);
   const { events, streamFrames, done, lastPayloadType } = await readSseStream(res);
   assert.ok(events.length > 0, "at least one trace event should be streamed");
-  assert.equal(events[0]?.stage, "reading_email", "first streamed event must be reading_email");
+  const firstEvent = events.reduce((a, b) => (a.sequence <= b.sequence ? a : b));
+  assert.equal(
+    firstEvent.stage,
+    "reading_email",
+    "lowest-sequence streamed event must be reading_email",
+  );
   assert.ok(
     events.some((e) => e.stage === "locating_account"),
     "locating_account stage must appear in the stream",
@@ -379,6 +444,13 @@ test("POST /api/cases/:id/run streams trace events and ends with a done frame", 
     ),
     "done frame events must include at least one completed stage event",
   );
+  const streamedIds = [...new Set(events.map((e) => e.id))].sort();
+  const doneEventIds = [...new Set(done!.events.map((e) => e.id))].sort();
+  assert.deepEqual(
+    doneEventIds,
+    streamedIds,
+    "done frame events id-set must equal the streamed trace-event id-set",
+  );
   const text = JSON.stringify({ events, streamFrames, done });
   assert.ok(!bodyContainsSecret(text), "streamed frames must not include any secret");
 });
@@ -400,6 +472,80 @@ test("POST /api/cases/:id/run twice with the same stored case works with no cros
     1,
     "second run must start from a fresh per-request store (no leaked state)",
   );
+});
+
+test("POST /api/cases/:id/run resumes a follow-up case from seeded prior events", async () => {
+  const stored: StoredCase = { ...makeStoredCase(), state: "reviewable" };
+  const priorEvents = makePriorFollowUpEvents(stored.caseId);
+  const res = await runRequest(stored.caseId, {
+    stored,
+    answers: { claimed_delay_minutes: "45" },
+    events: priorEvents,
+  });
+  assert.equal(res.status, 200);
+  const { events: streamed, done } = await readSseStream(res);
+  assert.ok(
+    !streamed.some((e) => e.stage === "reviewable" && e.status === "failed"),
+    "resume must not fail with invalid_state",
+  );
+  assert.ok(done, "done frame must be present");
+  assert.equal(done!.stored.state, "reviewable", "supplemented answers clear the follow-up");
+  const priorIds = new Set(priorEvents.map((e) => e.id));
+  const doneIds = new Set(done!.events.map((e) => e.id));
+  for (const prior of priorEvents) {
+    assert.ok(doneIds.has(prior.id), `done events must include seeded event ${prior.id}`);
+  }
+  const newEvents = done!.events.filter((e) => !priorIds.has(e.id));
+  assert.ok(newEvents.length > 0, "resume must add new events");
+  for (const ev of newEvents) {
+    assert.ok(ev.sequence > 3, `new event sequence must continue from 3, got ${ev.sequence}`);
+  }
+  const lastReviewable = [...done!.events]
+    .reverse()
+    .find((e) => e.stage === "reviewable" && e.status === "completed");
+  assert.equal(
+    (lastReviewable?.payload as { outcome?: string } | undefined)?.outcome,
+    "reviewable",
+    "final reviewable outcome must be reviewable, not follow_up",
+  );
+});
+
+test("POST /api/cases/:id/run with prior events continues sequence numbers instead of restarting", async () => {
+  const stored = makeStoredCase();
+  const first = await runRequest(stored.caseId, { stored });
+  assert.equal(first.status, 200);
+  const r1 = await readSseStream(first);
+  assert.ok(r1.done, "first run must end with a done frame");
+  const priorEvents = r1.done!.events;
+  const maxSeq = Math.max(...priorEvents.map((e) => e.sequence));
+
+  const second = await runRequest(stored.caseId, {
+    stored: r1.done!.stored,
+    events: priorEvents,
+  });
+  assert.equal(second.status, 200);
+  const r2 = await readSseStream(second);
+  assert.ok(r2.done, "second run must end with a done frame");
+  const all = r2.done!.events;
+  const sequences = all.map((e) => e.sequence);
+  assert.equal(new Set(sequences).size, sequences.length, "sequences must be unique");
+  assert.ok(Math.max(...sequences) > maxSeq, `max sequence must grow beyond ${maxSeq}`);
+  const priorIds = new Set(priorEvents.map((e) => e.id));
+  const fresh = all.filter((e) => !priorIds.has(e.id));
+  assert.ok(fresh.length > 0, "re-run must add new events");
+  for (const ev of fresh) {
+    assert.ok(
+      ev.sequence > maxSeq,
+      `fresh event sequence must continue after ${maxSeq}, got ${ev.sequence}`,
+    );
+  }
+});
+
+test("POST /api/cases/:id/run with non-array events returns 400 invalid_input", async () => {
+  const stored = makeStoredCase();
+  const res = await runRequest(stored.caseId, { stored, events: "nope" });
+  assert.equal(res.status, 400);
+  assert.equal((await readError(res)).error, "invalid_input");
 });
 
 test("POST /api/cases/:id/run with stored.caseId mismatch returns 400 invalid_input", async () => {

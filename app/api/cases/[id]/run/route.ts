@@ -89,10 +89,25 @@ export async function POST(
     answers = result.answers;
   }
 
+  let priorEvents: TraceEvent[] = [];
+  if ("events" in body) {
+    if (!Array.isArray(body.events)) {
+      return NextResponse.json(
+        { error: "invalid_input", message: "events must be an array" },
+        { status: 400 },
+      );
+    }
+    priorEvents = (body.events as unknown[]).filter((e): e is TraceEvent => {
+      if (e === null || typeof e !== "object" || Array.isArray(e)) return false;
+      const ev = e as Record<string, unknown>;
+      return ev.caseId === id && typeof ev.id === "string";
+    });
+  }
+
   const state: AppState = {
     schemaVersion: CURRENT_SCHEMA_VERSION,
     cases: [stored],
-    events: [],
+    events: priorEvents,
     learning: [],
   };
   const dataDir = `request:${id}:${globalThis.crypto.randomUUID()}`;

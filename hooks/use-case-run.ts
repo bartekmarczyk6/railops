@@ -9,6 +9,7 @@ export type CaseRunBody = { answers: Record<string, string> };
 
 export type CaseRunOptions = {
   getStored?: () => StoredCase | undefined;
+  getEvents?: () => TraceEvent[];
   onDone?: (stored: StoredCase, events: TraceEvent[]) => void;
 };
 
@@ -34,6 +35,7 @@ const INITIAL_STATE: CaseRunState = {
   error: null,
 };
 
+// Drift guard: if TraceEvent ever gains a `type` field, this check and the done-frame filter below would silently drop events.
 function isTraceEvent(value: unknown): value is TraceEvent {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
@@ -49,9 +51,11 @@ export function buildRunRequest(
   caseId: string,
   body?: CaseRunBody,
   stored?: StoredCase,
+  events?: TraceEvent[],
 ): { url: string; init: RequestInit } {
   const url = `/api/cases/${caseId}/run`;
-  if (body === undefined && stored === undefined) {
+  const hasEvents = Array.isArray(events) && events.length > 0;
+  if (body === undefined && stored === undefined && !hasEvents) {
     return { url, init: { method: "POST" } };
   }
   return {
@@ -59,7 +63,7 @@ export function buildRunRequest(
     init: {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...body, stored }),
+      body: JSON.stringify({ ...body, stored, ...(hasEvents ? { events } : {}) }),
     },
   };
 }
@@ -141,6 +145,7 @@ export function useCaseRun(
         caseId,
         body,
         optionsRef.current?.getStored?.(),
+        optionsRef.current?.getEvents?.(),
       );
       let response: Response;
       try {
