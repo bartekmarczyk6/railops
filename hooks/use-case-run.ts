@@ -1,11 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { TraceEvent } from "@/lib/storage/types.ts";
+import type { StoredCase, TraceEvent } from "@/lib/storage/types.ts";
 
 export type CaseRunStatus = "idle" | "running" | "done" | "error";
 
 export type CaseRunBody = { answers: Record<string, string> };
+
+export type CaseRunOptions = {
+  getStored?: () => StoredCase | undefined;
+  onDone?: (stored: StoredCase) => void;
+};
 
 export type CaseRunState = {
   status: CaseRunStatus;
@@ -43,15 +48,18 @@ function isTraceEvent(value: unknown): value is TraceEvent {
 export function buildRunRequest(
   caseId: string,
   body?: CaseRunBody,
+  stored?: StoredCase,
 ): { url: string; init: RequestInit } {
   const url = `/api/cases/${caseId}/run`;
-  if (body === undefined) return { url, init: { method: "POST" } };
+  if (body === undefined && stored === undefined) {
+    return { url, init: { method: "POST" } };
+  }
   return {
     url,
     init: {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...body, stored }),
     },
   };
 }
@@ -59,10 +67,13 @@ export function buildRunRequest(
 export function useCaseRun(
   caseId: string,
   live: boolean,
+  options?: CaseRunOptions,
 ): CaseRunState & { start: (body?: CaseRunBody) => void } {
   const [state, setState] = useState<CaseRunState>(INITIAL_STATE);
   const runningRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
 
   const start = useCallback((body?: CaseRunBody) => {
     if (runningRef.current) return;
@@ -99,6 +110,13 @@ export function useCaseRun(
         });
         return;
       }
+      if (value.type === "done") {
+        const stored = value.stored as Partial<StoredCase> | null;
+        if (stored && typeof stored === "object" && typeof stored.caseId === "string" && stored.caseId.length > 0) {
+          optionsRef.current?.onDone?.(stored as StoredCase);
+        }
+        return;
+      }
       if (!isTraceEvent(parsed)) return;
       const event = parsed;
       setState((s) => {
@@ -115,7 +133,11 @@ export function useCaseRun(
     };
 
     void (async () => {
-      const { url, init } = buildRunRequest(caseId, body);
+      const { url, init } = buildRunRequest(
+        caseId,
+        body,
+        optionsRef.current?.getStored?.(),
+      );
       let response: Response;
       try {
         response = await fetch(url, { ...init, signal: controller.signal });
@@ -134,7 +156,10 @@ export function useCaseRun(
         setState((s) => ({
           ...s,
           status: "error",
-          error: `Run failed with HTTP ${response.status}`,
+          error:
+            response.status === 429
+              ? "The demo is rate-limited — please wait a moment."
+              : `Run failed with HTTP ${response.status}`,
         }));
         return;
       }
