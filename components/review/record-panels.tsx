@@ -23,7 +23,40 @@ export type RecordPanelsProps = {
     updatedAt: string;
   }>;
   verified?: boolean;
+  embedded?: boolean;
 };
+
+export function RecordsStatusBadge({
+  verified,
+  flip = false,
+}: {
+  verified: boolean;
+  flip?: boolean;
+}): React.JSX.Element {
+  return verified ? (
+    <span
+      data-field="verified"
+      className={`inline-flex h-6 items-center gap-1.5 rounded-full bg-green-tint px-2.5 text-[12px] font-medium text-green${
+        flip ? " enter-fade-up" : ""
+      }`}
+    >
+      <CircleCheck className="size-3.5" /> Records verified
+    </span>
+  ) : (
+    <span
+      data-field="verifying"
+      role="status"
+      className="inline-flex h-6 items-center gap-1.5 rounded-full bg-inset px-2.5 text-[12px] font-medium text-ink-2"
+    >
+      <span
+        aria-hidden
+        className="size-3 rounded-full border-[1.5px] border-line-strong border-t-ink-2"
+        style={{ animation: "spin 700ms linear infinite" }}
+      />
+      Checking the records…
+    </span>
+  );
+}
 
 function Row({
   label,
@@ -78,10 +111,65 @@ export function RecordPanels({
   pkg,
   priorHistory,
   verified = true,
+  embedded = false,
 }: RecordPanelsProps): React.JSX.Element {
   const verifyFlip = useRef({ prev: verified, hit: false });
   if (verified && !verifyFlip.current.prev) verifyFlip.current.hit = true;
   verifyFlip.current.prev = verified;
+  const groups = (
+    <>
+      <RecordGroup title="Account">
+        <AccountRows account={pkg.account} />
+      </RecordGroup>
+      <RecordGroup title="Tickets" count={pkg.tickets.length}>
+        {pkg.tickets.length === 0 ? (
+          <p data-field="none" className="m-0 py-2 text-[13px] text-ink-3">
+            No tickets on this account.
+          </p>
+        ) : (
+          <div className="grid gap-2 py-2">
+            {pkg.tickets.map((t) => (
+              <TicketBlock key={t.id} ticket={t} />
+            ))}
+          </div>
+        )}
+      </RecordGroup>
+      <RecordGroup title="Payments" count={pkg.payments.length}>
+        {pkg.payments.length === 0 ? (
+          <p data-field="none" className="m-0 py-2 text-[13px] text-ink-3">
+            No payments recorded.
+          </p>
+        ) : (
+          <div className="py-1">
+            {pkg.payments.map((p) => (
+              <PaymentRows key={p.id} payment={p} />
+            ))}
+          </div>
+        )}
+      </RecordGroup>
+      <RecordGroup title="Journey">
+        <RouteRows route={pkg.route} />
+      </RecordGroup>
+      <RecordGroup title="Disruption">
+        <DisruptionRows disruption={pkg.disruption} />
+      </RecordGroup>
+      <RecordGroup title="Prior cases" count={priorHistory.length}>
+        <PriorHistoryRows history={priorHistory} />
+      </RecordGroup>
+    </>
+  );
+  if (embedded) {
+    return (
+      <div
+        data-component="record-panels"
+        data-section="records"
+        aria-label="Passenger file"
+        className="grid gap-4"
+      >
+        {groups}
+      </div>
+    );
+  }
   return (
     <section
       data-component="record-panels"
@@ -91,70 +179,11 @@ export function RecordPanels({
     >
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2.5">
         <h2 className="m-0 font-display text-[14px] font-semibold text-ink">Passenger file</h2>
-        {verified ? (
-          <span
-            data-field="verified"
-            className={`inline-flex h-6 items-center gap-1.5 rounded-full bg-green-tint px-2.5 text-[12px] font-medium text-green${
-              verifyFlip.current.hit ? " enter-fade-up" : ""
-            }`}
-          >
-            <CircleCheck className="size-3.5" /> Records verified
-          </span>
-        ) : (
-          <span
-            data-field="verifying"
-            role="status"
-            className="inline-flex h-6 items-center gap-1.5 rounded-full bg-inset px-2.5 text-[12px] font-medium text-ink-2"
-          >
-            <span
-              aria-hidden
-              className="size-3 rounded-full border-[1.5px] border-line-strong border-t-ink-2"
-              style={{ animation: "spin 700ms linear infinite" }}
-            />
-            Checking the records…
-          </span>
-        )}
+        <span className="contents">
+          <RecordsStatusBadge verified={verified} flip={verifyFlip.current.hit} />
+        </span>
       </div>
-      <div className="grid gap-4 p-4">
-        <RecordGroup title="Account">
-          <AccountRows account={pkg.account} />
-        </RecordGroup>
-        <RecordGroup title="Tickets" count={pkg.tickets.length}>
-          {pkg.tickets.length === 0 ? (
-            <p data-field="none" className="m-0 py-2 text-[13px] text-ink-3">
-              No tickets on this account.
-            </p>
-          ) : (
-            <div className="grid gap-2 py-2">
-              {pkg.tickets.map((t) => (
-                <TicketBlock key={t.id} ticket={t} />
-              ))}
-            </div>
-          )}
-        </RecordGroup>
-        <RecordGroup title="Payments" count={pkg.payments.length}>
-          {pkg.payments.length === 0 ? (
-            <p data-field="none" className="m-0 py-2 text-[13px] text-ink-3">
-              No payments recorded.
-            </p>
-          ) : (
-            <div className="py-1">
-              {pkg.payments.map((p) => (
-                <PaymentRows key={p.id} payment={p} />
-              ))}
-            </div>
-          )}
-        </RecordGroup>
-        <RecordGroup title="Journey">
-          <RouteRows route={pkg.route} />
-        </RecordGroup>
-        <RecordGroup title="Disruption">
-          <DisruptionRows disruption={pkg.disruption} />
-        </RecordGroup>
-        <RecordGroup title="Prior cases" count={priorHistory.length}>
-          <PriorHistoryRows history={priorHistory} />
-        </RecordGroup>
-      </div>
+      <div className="grid gap-4 p-4">{groups}</div>
     </section>
   );
 }

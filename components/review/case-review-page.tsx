@@ -32,14 +32,15 @@ import { OUTCOME_LABEL, outcomeLabel } from "./formatters.ts";
 import { CaseHeader } from "./case-header.tsx";
 import { RecommendationCard } from "./recommendation-card.tsx";
 import { EmailPanel } from "./email-panel.tsx";
-import { RecordPanels } from "./record-panels.tsx";
+import { RecordPanels, RecordsStatusBadge } from "./record-panels.tsx";
 import { KnowledgePanel, type KnowledgeExcerptView } from "./knowledge-panel.tsx";
 import { ApprovalCard } from "./approval-card.tsx";
 import { LearningResult } from "./learning-result.tsx";
 import { DraftResponseCard } from "./draft-response-card.tsx";
 import { FollowUpCard, buildFollowUpQuestions } from "./follow-up-card.tsx";
-import { EventTimeline } from "@/components/trace/event-timeline.tsx";
 import { RawEvidenceSheet } from "@/components/trace/raw-evidence-sheet.tsx";
+import { DisclosureCard } from "./disclosure-card.tsx";
+import { AgentActivityCard, activitySummary } from "./agent-activity-card.tsx";
 
 export type CaseReviewPageProps = {
   caseData: StoredCase;
@@ -384,6 +385,8 @@ export function CaseReviewPage(props: CaseReviewPageProps): React.JSX.Element {
     fullName: caseData.pkg.account.fullName,
     email: caseData.pkg.account.email,
   };
+  const learningRecord = latestLearningForCase(hindsight, currentCase);
+  const hindsightViews = hindsight.map(toHindsightView);
 
   async function runAction(action: "approve" | "reject" | "edit"): Promise<boolean> {
     const result = buildReviewInput({
@@ -452,163 +455,150 @@ export function CaseReviewPage(props: CaseReviewPageProps): React.JSX.Element {
         </Alert>
       ) : null}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 lg:items-start lg:gap-5">
-        <div className="order-1 min-w-0 lg:order-none lg:col-span-7 lg:col-start-6 lg:row-start-1">
-          <RecommendationCard
-            caseData={currentCase}
-            decision={displayDecision}
-            claims={displayClaims}
-            critique={displayCritique}
-            rulesSummary={displayRulesSummary}
-            confidence={displayConfidence}
-            alternatives={displayAlternatives}
-            followUp={displayFollowUp}
-            pending={decisionPending}
-            streaming={decisionStreaming}
-          />
-        </div>
-        <div className="order-6 min-w-0 lg:order-none lg:col-span-5 lg:col-start-1 lg:row-start-2">
-          <RecordPanels pkg={caseData.pkg} priorHistory={priorHistory} verified={recordsVerified} />
-        </div>
-        <div className="order-3 min-w-0 lg:order-none lg:col-span-7 lg:col-start-6 lg:row-start-2">
-          <AgentActivityCard
-            events={events}
-            running={runActive && run.status === "running"}
-            onSelectEvent={setSelectedEvent}
-          />
-        </div>
-        <div className="order-4 min-w-0 lg:order-none lg:col-span-7 lg:col-start-6 lg:row-start-3">
-          <DraftResponseCard
-            decision={displayDecision}
-            streaming={decisionStreaming}
-            pending={decisionPending}
-            editing={editing}
-            editedDraft={form.editedDraft}
-            onChangeEditedDraft={(next) => setForm((f) => ({ ...f, editedDraft: next }))}
-            account={account}
-            subject={displayEmail.subject}
-            currency={currency}
-            caseId={caseData.caseId}
-            topic={caseData.topic}
-            truthMode={caseData.truthMode}
-            rewriteEnabled={
-              currentCase.state === "reviewable" && !pending && !decisionStreaming
-            }
-            onApplyRewrite={(newResponse) => {
-              const base = form.editedDraft ?? displayDecision;
-              if (!base) return;
-              setForm((f) => ({ ...f, editedDraft: { ...base, response: newResponse } }));
-              setEditing(true);
-            }}
-          />
-        </div>
-        <div className="order-5 grid min-w-0 gap-4 lg:order-none lg:col-span-7 lg:col-start-6 lg:row-start-4">
-          {showFollowUpCard ? (
-            <FollowUpCard
-              key={latestReviewableEventId}
-              questions={followUpQuestions}
-              message={followUpMessage}
-              busy={run.status === "running"}
-              onSubmit={submitFollowUp}
+        <div className="order-1 min-w-0 lg:order-none lg:col-span-8 lg:col-start-5 lg:row-start-1">
+          <div className="grid gap-4">
+            <RecommendationCard
+              caseData={currentCase}
+              decision={displayDecision}
+              claims={displayClaims}
+              critique={displayCritique}
+              rulesSummary={displayRulesSummary}
+              confidence={displayConfidence}
+              alternatives={displayAlternatives}
+              followUp={displayFollowUp}
+              pending={decisionPending}
+              streaming={decisionStreaming}
             />
-          ) : (
-            <ApprovalCard
-              state={currentCase.state}
-              decision={decision}
-              form={form}
-              onFormChange={setForm}
+            <DraftResponseCard
+              decision={displayDecision}
+              streaming={decisionStreaming}
+              pending={decisionPending}
               editing={editing}
-              onStartEdit={() => setEditing(true)}
-              onCancelEdit={() => {
-                setEditing(false);
-                setForm((f) => ({ ...f, editedDraft: { ...decision } }));
+              editedDraft={form.editedDraft}
+              onChangeEditedDraft={(next) => setForm((f) => ({ ...f, editedDraft: next }))}
+              account={account}
+              subject={displayEmail.subject}
+              currency={currency}
+              caseId={caseData.caseId}
+              topic={caseData.topic}
+              truthMode={caseData.truthMode}
+              rewriteEnabled={
+                currentCase.state === "reviewable" && !pending && !decisionStreaming
+              }
+              onApplyRewrite={(newResponse) => {
+                const base = form.editedDraft ?? displayDecision;
+                if (!base) return;
+                setForm((f) => ({ ...f, editedDraft: { ...base, response: newResponse } }));
+                setEditing(true);
               }}
-              onSaveEdit={() => runAction("edit")}
-              onApprove={() => runAction("approve")}
-              onReject={() => runAction("reject")}
-              onRetry={() => run.start()}
-              pending={pending || (runActive && run.status === "running")}
-              lastError={lastError}
             />
-          )}
-          <LearningResult
-            record={latestLearningForCase(hindsight, currentCase)}
-            learningSaved={currentCase.learningRef !== null}
-            reviewed={currentCase.reviewHistory.length > 0}
-            onUndo={undoLearning}
-          />
+            {showFollowUpCard ? (
+              <FollowUpCard
+                key={latestReviewableEventId}
+                questions={followUpQuestions}
+                message={followUpMessage}
+                busy={run.status === "running"}
+                onSubmit={submitFollowUp}
+              />
+            ) : (
+              <ApprovalCard
+                state={currentCase.state}
+                decision={decision}
+                form={form}
+                onFormChange={setForm}
+                editing={editing}
+                onStartEdit={() => setEditing(true)}
+                onCancelEdit={() => {
+                  setEditing(false);
+                  setForm((f) => ({ ...f, editedDraft: { ...decision } }));
+                }}
+                onSaveEdit={() => runAction("edit")}
+                onApprove={() => runAction("approve")}
+                onReject={() => runAction("reject")}
+                onRetry={() => run.start()}
+                pending={pending || (runActive && run.status === "running")}
+                lastError={lastError}
+              />
+            )}
+            <LearningResult
+              record={learningRecord}
+              learningSaved={currentCase.learningRef !== null}
+              reviewed={currentCase.reviewHistory.length > 0}
+              onUndo={undoLearning}
+            />
+          </div>
         </div>
-        <div className="order-2 min-w-0 lg:order-none lg:col-span-5 lg:col-start-1 lg:row-start-1">
-          <EmailPanel
-            email={displayEmail}
-            claims={displayClaims}
-            decision={null}
-            editing={false}
-            editedDraft={null}
-            onChangeEditedDraft={(next) => setForm((f) => ({ ...f, editedDraft: next }))}
-            account={account}
-            from={displayEmailFrom}
-            receivedAt={displayReceivedAt}
-            emailStreaming={emailStreaming}
-            claimsStreaming={claimsStreaming}
-            decisionStreaming={decisionStreaming}
-          />
+        <div className="order-2 min-w-0 lg:order-none lg:col-span-4 lg:col-start-1 lg:row-start-1">
+          <div className="grid gap-3 lg:sticky lg:top-6 lg:max-h-[calc(100dvh-3rem)] lg:overflow-y-auto lg:pe-1">
+            <DisclosureCard
+              title="Inbound email"
+              summary={displayEmail.subject}
+              forceOpen={emailStreaming || claimsStreaming}
+            >
+              <EmailPanel
+                email={displayEmail}
+                claims={displayClaims}
+                decision={null}
+                editing={false}
+                editedDraft={null}
+                onChangeEditedDraft={(next) => setForm((f) => ({ ...f, editedDraft: next }))}
+                account={account}
+                from={displayEmailFrom}
+                receivedAt={displayReceivedAt}
+                emailStreaming={emailStreaming}
+                claimsStreaming={claimsStreaming}
+                decisionStreaming={decisionStreaming}
+                embedded
+              />
+            </DisclosureCard>
+            <DisclosureCard
+              title="Passenger file"
+              badge={<RecordsStatusBadge verified={recordsVerified} />}
+            >
+              <RecordPanels
+                pkg={caseData.pkg}
+                priorHistory={priorHistory}
+                verified={recordsVerified}
+                embedded
+              />
+            </DisclosureCard>
+            <DisclosureCard
+              title="Knowledge"
+              badge={knowledgeRetrieving ? <Shimmer className="text-[12px] font-medium">Searching…</Shimmer> : null}
+              summary={knowledge.length > 0 ? `${knowledge.length} passages` : undefined}
+            >
+              <KnowledgePanel
+                staticKnowledge={knowledge}
+                hindsightLearning={hindsightViews}
+                retrievedCount={runActive ? retrievedCount : null}
+                retrieving={knowledgeRetrieving}
+                embedded
+              />
+            </DisclosureCard>
+          </div>
         </div>
-        <div className="order-7 min-w-0 lg:order-none lg:col-span-5 lg:col-start-1 lg:row-start-3">
-          <KnowledgePanel
-            staticKnowledge={knowledge}
-            hindsightLearning={hindsight.map(toHindsightView)}
-            retrievedCount={runActive ? retrievedCount : null}
-            retrieving={knowledgeRetrieving}
-          />
+        <div className="order-3 min-w-0 lg:order-none lg:col-span-8 lg:col-start-5 lg:row-start-2">
+          <DisclosureCard
+            title="Agent activity"
+            badge={
+              runActive && run.status === "running" ? (
+                <Shimmer className="text-[12px] font-medium">Working through the case…</Shimmer>
+              ) : null
+            }
+            summary={events.length > 0 ? activitySummary(events) : undefined}
+            forceOpen={runActive && run.status === "running"}
+          >
+            <AgentActivityCard
+              events={events}
+              running={runActive && run.status === "running"}
+              onSelectEvent={setSelectedEvent}
+              embedded
+            />
+          </DisclosureCard>
         </div>
-      </div>
+        </div>
       <RawEvidenceSheet event={selectedEvent} onClose={() => setSelectedEvent(null)} />
     </main>
-  );
-}
-
-function AgentActivityCard({
-  events,
-  running,
-  onSelectEvent,
-}: {
-  events: TraceEvent[];
-  running: boolean;
-  onSelectEvent: (event: TraceEvent) => void;
-}): React.JSX.Element {
-  const totalMs = events.reduce((sum, e) => sum + (e.durationMs ?? 0), 0);
-  return (
-    <section
-      data-component="agent-activity"
-      data-section="agent-activity"
-      aria-label="Agent activity"
-      className="overflow-hidden rounded-card bg-surface shadow-card"
-    >
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2.5">
-        <h2 className="m-0 font-display text-[14px] font-semibold text-ink">Agent activity</h2>
-        {running ? (
-          <Shimmer className="text-[12px] font-medium">Working through the case…</Shimmer>
-        ) : events.length > 0 ? (
-          <span className="font-mono text-[11.5px] tabular-nums text-ink-3">
-            {events.length} steps · {totalMs} ms
-          </span>
-        ) : null}
-      </div>
-      <div className="p-2">
-        {events.length === 0 ? (
-          <p className="m-0 flex items-center gap-2 px-2 py-1.5 text-[13px] text-ink-2" role="status">
-            <span
-              aria-hidden
-              className="size-3.5 rounded-full border-[1.5px] border-line-strong border-t-ink-2"
-              style={{ animation: "spin 700ms linear infinite" }}
-            />
-            Starting the agent…
-          </p>
-        ) : (
-          <EventTimeline events={events} onSelectEvent={onSelectEvent} />
-        )}
-      </div>
-    </section>
   );
 }
 
